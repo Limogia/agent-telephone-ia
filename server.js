@@ -6,6 +6,7 @@ const { VoiceResponse } = twilio.twiml;
 
 const app = express();
 app.use(express.urlencoded({ extended: true }));
+app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
 
@@ -13,24 +14,23 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
 
+// 🔹 Test simple serveur
 app.get("/", (req, res) => {
   res.send("Serveur agent IA actif 🚀");
 });
 
-app.post("/voice", async (req, res) => {
-  const twiml = new VoiceResponse();
-
-  const userSpeech = req.body.SpeechResult || "";
-
-  const completion = await openai.chat.completions.create({
-    model: "gpt-4o-mini",
-    messages: [
-      {
-        role: "system",
-        content: `
+// 🔹 Test OpenAI sans Twilio
+app.get("/test", async (req, res) => {
+  try {
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [
+        {
+          role: "system",
+          content: `
 Tu es l’assistante téléphonique chaleureuse d’un cabinet médical.
 
-Tu parles calmement et de manière rassurante.
+Tu parles calmement, de manière rassurante et professionnelle.
 Tu fais des phrases courtes.
 Une seule question à la fois.
 
@@ -40,34 +40,32 @@ Tu peux :
 - Prendre un message
 - Répondre aux questions simples
 
-En cas d'urgence médicale, demande d'appeler le 15.
-
-Commence naturellement la conversation.
+Ne donne jamais d’avis médical.
+En cas d'urgence, demande d'appeler le 15.
 `
-      },
-      {
-        role: "user",
-        content: userSpeech
-      }
-    ]
-  });
+        },
+        {
+          role: "user",
+          content: "Bonjour, je voudrais prendre rendez-vous demain matin."
+        }
+      ]
+    });
 
-  const responseText = completion.choices[0].message.content;
+    res.send(completion.choices[0].message.content);
 
-  twiml.say(
-    { voice: "alice", language: "fr-FR" },
-    responseText
-  );
-
-  twiml.gather({
-    input: "speech",
-    action: "/voice",
-    method: "POST"
-  });
-
-  res.type("text/xml");
-  res.send(twiml.toString());
+  } catch (error) {
+    console.error(error);
+    res.send("Erreur OpenAI ❌");
+  }
 });
+
+// 🔹 Route pour Twilio (appel vocal)
+app.post("/voice", async (req, res) => {
+  const twiml = new VoiceResponse();
+
+  try {
+    con
+
 
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
