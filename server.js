@@ -14,21 +14,61 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
 
-// Route principale
 app.get("/", (req, res) => {
-  res.send("Serveur agent IA actif 🚀");
+  res.send("Serveur actif");
 });
 
-// Route test OpenAI
 app.get("/test", async (req, res) => {
   try {
     const completion = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       messages: [
-        {
-          role: "system",
-          content: "Tu es une assistante médicale chaleureuse."
-        },
-        {
-          role: "user",
-          content: "Je voudrais
+        { role: "system", content: "You are a medical assistant." },
+        { role: "user", content: "I want to book an appointment tomorrow morning." }
+      ]
+    });
+
+    res.send(completion.choices[0].message.content);
+
+  } catch (error) {
+    console.error(error);
+    res.send("OpenAI error");
+  }
+});
+
+app.post("/voice", async (req, res) => {
+  const twiml = new VoiceResponse();
+
+  try {
+    const userSpeech = req.body.SpeechResult || "";
+
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [
+        { role: "system", content: "You are a medical assistant. Keep answers short." },
+        { role: "user", content: userSpeech }
+      ]
+    });
+
+    const responseText = completion.choices[0].message.content;
+
+    twiml.say({ voice: "alice", language: "fr-FR" }, responseText);
+
+    twiml.gather({
+      input: "speech",
+      action: "/voice",
+      method: "POST"
+    });
+
+  } catch (error) {
+    console.error(error);
+    twiml.say("An error occurred.");
+  }
+
+  res.type("text/xml");
+  res.send(twiml.toString());
+});
+
+app.listen(PORT, () => {
+  console.log("Server running");
+});
