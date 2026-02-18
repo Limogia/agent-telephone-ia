@@ -24,22 +24,31 @@ const auth = new google.auth.GoogleAuth({
 
 const calendar = google.calendar({ version: "v3", auth });
 
-async function createEvent(summary, startDateTime, endDateTime) {
-  return await calendar.events.insert({
-    calendarId: "primary",
-    requestBody: {
-      summary,
-      start: {
-        dateTime: startDateTime,
-        timeZone: "Europe/Paris"
-      },
-      end: {
-        dateTime: endDateTime,
-        timeZone: "Europe/Paris"
+app.get("/calendar-test", async (req, res) => {
+  try {
+    const event = await calendar.events.insert({
+      calendarId: "primary",
+      requestBody: {
+        summary: "Test RDV IA",
+        description: "Rendez-vous créé automatiquement",
+        start: {
+          dateTime: new Date(Date.now() + 600000).toISOString(),
+          timeZone: "Europe/Paris"
+        },
+        end: {
+          dateTime: new Date(Date.now() + 3600000).toISOString(),
+          timeZone: "Europe/Paris"
+        }
       }
-    }
-  });
-}
+    });
+
+    res.send("Événement créé : " + event.data.htmlLink);
+
+  } catch (error) {
+    console.error(error);
+    res.send("Erreur création événement");
+  }
+});
 
 app.get("/create-test", async (req, res) => {
   try {
