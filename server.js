@@ -24,6 +24,41 @@ const auth = new google.auth.GoogleAuth({
 
 const calendar = google.calendar({ version: "v3", auth });
 
+async function createEvent(summary, startDateTime, endDateTime) {
+  return await calendar.events.insert({
+    calendarId: "primary",
+    requestBody: {
+      summary,
+      start: {
+        dateTime: startDateTime,
+        timeZone: "Europe/Paris"
+      },
+      end: {
+        dateTime: endDateTime,
+        timeZone: "Europe/Paris"
+      }
+    }
+  });
+}
+
+app.get("/create-test", async (req, res) => {
+  try {
+    const start = new Date();
+    const end = new Date(start.getTime() + 30 * 60000);
+
+    await createEvent(
+      "Test rendez-vous IA",
+      start.toISOString(),
+      end.toISOString()
+    );
+
+    res.send("Rendez-vous créé !");
+  } catch (error) {
+    console.error(error);
+    res.send("Erreur lors de la création");
+  }
+});
+
 app.get("/", (req, res) => {
   res.send("Serveur actif");
 });
