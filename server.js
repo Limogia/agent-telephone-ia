@@ -1,6 +1,7 @@
 import express from "express";
 import OpenAI from "openai";
 import twilio from "twilio";
+import { google } from "googleapis";
 
 const { VoiceResponse } = twilio.twiml;
 
@@ -13,6 +14,15 @@ const PORT = process.env.PORT || 3000;
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
+
+const credentials = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT);
+
+const auth = new google.auth.GoogleAuth({
+  credentials,
+  scopes: ["https://www.googleapis.com/auth/calendar"]
+});
+
+const calendar = google.calendar({ version: "v3", auth });
 
 app.get("/", (req, res) => {
   res.send("Serveur actif");
