@@ -42,6 +42,20 @@ app.get("/auth/google/callback", async (req, res) => {
   }
 });
 
+app.use(express.urlencoded({ extended: false }));
+
+// Route SMS Twilio
+app.post("/sms", (req, res) => {
+  console.log("SMS reçu :", req.body.Body);
+
+  res.set("Content-Type", "text/xml");
+  res.send(`
+    <Response>
+      <Message>Message bien reçu 👌</Message>
+    </Response>
+  `);
+});
+
 app.listen(PORT, () => {
   console.log("Server running on port " + PORT);
 });
