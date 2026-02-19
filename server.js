@@ -5,6 +5,11 @@ const { google } = require("googleapis");
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+app.use(express.json());
+app.use(express.urlencoded({ extended: false }));
+
+// ================= GOOGLE OAUTH =================
+
 // Configuration OAuth Google
 const oauth2Client = new google.auth.OAuth2(
   process.env.GOOGLE_CLIENT_ID,
@@ -12,12 +17,17 @@ const oauth2Client = new google.auth.OAuth2(
   process.env.GOOGLE_REDIRECT_URI
 );
 
+// Injection automatique du refresh token
+oauth2Client.setCredentials({
+  refresh_token: process.env.GOOGLE_REFRESH_TOKEN,
+});
+
 // Route test
 app.get("/", (req, res) => {
   res.send("Serveur actif ✅");
 });
 
-// Route connexion Google
+// Route connexion Google (utile si tu veux reconnecter)
 app.get("/auth/google", (req, res) => {
   const url = oauth2Client.generateAuthUrl({
     access_type: "offline",
@@ -43,7 +53,39 @@ app.get("/auth/google/callback", async (req, res) => {
   }
 });
 
-app.use(express.urlencoded({ extended: false }));
+// ================= GOOGLE CALENDAR =================
+
+// Route pour créer un événement test
+app.get("/create-event", async (req, res) => {
+  try {
+    const calendar = google.calendar({ version: "v3", auth: oauth2Client });
+
+    const event = {
+      summary: "Test RDV IA",
+      description: "Rendez-vous créé automatiquement par ton agent IA",
+      start: {
+        dateTime: "2026-02-20T10:00:00",
+        timeZone: "Europe/Paris",
+      },
+      end: {
+        dateTime: "2026-02-20T10:30:00",
+        timeZone: "Europe/Paris",
+      },
+    };
+
+    const response = await calendar.events.insert({
+      calendarId: "primary",
+      resource: event,
+    });
+
+    res.send("✅ Événement créé : " + response.data.htmlLink);
+  } catch (error) {
+    console.error(error);
+    res.send("❌ Erreur création événement");
+  }
+});
+
+// ================= TWILIO SMS =================
 
 // Route SMS Twilio
 app.post("/sms", (req, res) => {
@@ -57,6 +99,7 @@ app.post("/sms", (req, res) => {
   `);
 });
 
+// Route envoi SMS test
 app.get("/send-test-sms", async (req, res) => {
   try {
     const client = twilio(
@@ -76,7 +119,6 @@ app.get("/send-test-sms", async (req, res) => {
     res.send("Erreur envoi SMS");
   }
 });
-
 
 app.listen(PORT, () => {
   console.log("Server running on port " + PORT);
