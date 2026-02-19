@@ -10,52 +10,23 @@ app.use(express.urlencoded({ extended: false }));
 
 // ================= GOOGLE OAUTH =================
 
-// Configuration OAuth Google
 const oauth2Client = new google.auth.OAuth2(
   process.env.GOOGLE_CLIENT_ID,
   process.env.GOOGLE_CLIENT_SECRET,
   process.env.GOOGLE_REDIRECT_URI
 );
 
-// Injection automatique du refresh token
 oauth2Client.setCredentials({
   refresh_token: process.env.GOOGLE_REFRESH_TOKEN,
 });
 
-// Route test
+// Route test serveur
 app.get("/", (req, res) => {
   res.send("Serveur actif ✅");
 });
 
-// Route connexion Google (utile si tu veux reconnecter)
-app.get("/auth/google", (req, res) => {
-  const url = oauth2Client.generateAuthUrl({
-    access_type: "offline",
-    prompt: "consent",
-    scope: ["https://www.googleapis.com/auth/calendar"],
-  });
-
-  res.redirect(url);
-});
-
-// Callback Google
-app.get("/auth/google/callback", async (req, res) => {
-  try {
-    const code = req.query.code;
-    const { tokens } = await oauth2Client.getToken(code);
-
-    console.log("REFRESH TOKEN:", tokens.refresh_token);
-
-    res.send("Google Calendar connecté ✅ Regarde les logs Railway.");
-  } catch (error) {
-    console.error(error);
-    res.send("Erreur connexion Google");
-  }
-});
-
 // ================= GOOGLE CALENDAR =================
 
-// Route pour créer un événement test
 app.get("/create-event", async (req, res) => {
   try {
     const calendar = google.calendar({ version: "v3", auth: oauth2Client });
@@ -85,9 +56,9 @@ app.get("/create-event", async (req, res) => {
   }
 });
 
-// ================= TWILIO SMS =================
+// ================= TWILIO =================
 
-// Route SMS Twilio
+// Réception SMS
 app.post("/sms", (req, res) => {
   console.log("SMS reçu :", req.body.Body);
 
@@ -99,7 +70,7 @@ app.post("/sms", (req, res) => {
   `);
 });
 
-// Route envoi SMS test
+// Envoi SMS test DIRECT (sans Messaging Service)
 app.get("/send-test-sms", async (req, res) => {
   try {
     const client = twilio(
@@ -108,9 +79,9 @@ app.get("/send-test-sms", async (req, res) => {
     );
 
     await client.messages.create({
-      body: "Test SMS depuis Limogia 🚀",
-      messagingServiceSid: process.env.TWILIO_MESSAGING_SERVICE_SID,
-      to: "+33664248605"
+      body: "Test SMS direct 🚀",
+      from: "+12566735963",   // TON numéro Twilio
+      to: "+33664248605"      // TON numéro perso vérifié
     });
 
     res.send("SMS envoyé !");
