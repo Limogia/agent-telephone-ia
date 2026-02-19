@@ -178,13 +178,14 @@ app.listen(PORT, () => {
 });
 
 // ================= TWILIO VOICE =================
-app.post("/voice", (req, res) => {
-  res.set("Content-Type", "text/xml");
+app.all("/voice", (req, res) => {
+  res.type("text/xml");
   res.send(`
 <Response>
   <Say voice="alice" language="fr-FR">
-    Bonjour, vous êtes bien au cabinet médical Limogia. Comment puis-je vous aider ?
+    Bonjour, ceci est un test vocal.
   </Say>
 </Response>
   `);
 });
+
