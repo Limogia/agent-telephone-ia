@@ -173,10 +173,6 @@ app.get("/send-test-sms", async (req, res) => {
   }
 });
 
-app.listen(PORT, () => {
-  console.log("Server running on port " + PORT);
-});
-
 // ================= TWILIO VOICE =================
 app.all("/voice", (req, res) => {
   res.type("text/xml");
@@ -189,3 +185,7 @@ app.all("/voice", (req, res) => {
   `);
 });
 
+
+app.listen(PORT, () => {
+  console.log("Server running on port " + PORT);
+});
