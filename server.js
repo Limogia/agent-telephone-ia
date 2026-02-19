@@ -160,10 +160,11 @@ app.get("/send-test-sms", async (req, res) => {
     );
 
     await client.messages.create({
-      body: "Test SMS depuis Limogia 🚀",
-      messagingServiceSid: process.env.TWILIO_MESSAGING_SERVICE_SID,
-      to: "+33664248605",
-    });
+  body: "Test SMS direct 🚀",
+  from: "+12566735963", // ton numéro Twilio
+  to: "+33664248605"
+});
+
 
     res.send("SMS envoyé !");
   } catch (error) {
