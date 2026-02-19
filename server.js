@@ -31,7 +31,7 @@ app.get("/", (req, res) => {
   res.send("Serveur actif ✅");
 });
 
-// ================= GOOGLE AUTH (reconnexion si besoin) =================
+// ================= GOOGLE AUTH =================
 app.get("/auth/google", (req, res) => {
   const url = oauth2Client.generateAuthUrl({
     access_type: "offline",
@@ -104,18 +104,19 @@ async function createGoogleEvent(summary, start, end) {
   return response.data.htmlLink;
 }
 
-// ================= SIMULATION APPEL =================
+// ================= SIMULATION APPEL (CORRIGÉE) =================
 app.post("/simulate-call", async (req, res) => {
   try {
     const { message } = req.body;
 
     const aiResponse = await openai.chat.completions.create({
       model: "gpt-4o-mini",
+      response_format: { type: "json_object" }, // 🔥 FORCER JSON VALIDE
       messages: [
         {
           role: "system",
           content:
-            "Tu extrais une date et heure d'une phrase. Tu réponds uniquement en JSON avec summary, start et end en format ISO.",
+            "Tu extrais une date et heure d'une phrase. Tu réponds uniquement avec un JSON contenant summary, start, end. Les dates doivent être au format ISO complet comme 2026-04-10T15:00:00.",
         },
         { role: "user", content: message },
       ],
@@ -160,11 +161,10 @@ app.get("/send-test-sms", async (req, res) => {
     );
 
     await client.messages.create({
-  body: "Test SMS direct 🚀",
-  from: "+12566735963", // ton numéro Twilio
-  to: "+33664248605"
-});
-
+      body: "Test SMS depuis Limogia 🚀",
+      messagingServiceSid: process.env.TWILIO_MESSAGING_SERVICE_SID,
+      to: "+33664248605",
+    });
 
     res.send("SMS envoyé !");
   } catch (error) {
