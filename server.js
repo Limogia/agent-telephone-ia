@@ -176,3 +176,15 @@ app.get("/send-test-sms", async (req, res) => {
 app.listen(PORT, () => {
   console.log("Server running on port " + PORT);
 });
+
+// ================= TWILIO VOICE =================
+app.post("/voice", (req, res) => {
+  res.set("Content-Type", "text/xml");
+  res.send(`
+<Response>
+  <Say voice="alice" language="fr-FR">
+    Bonjour, vous êtes bien au cabinet médical Limogia. Comment puis-je vous aider ?
+  </Say>
+</Response>
+  `);
+});
