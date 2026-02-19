@@ -1,4 +1,5 @@
 const express = require("express");
+const twilio = require("twilio");
 const { google } = require("googleapis");
 
 const app = express();
@@ -55,6 +56,27 @@ app.post("/sms", (req, res) => {
     </Response>
   `);
 });
+
+app.get("/send-test-sms", async (req, res) => {
+  try {
+    const client = twilio(
+      process.env.TWILIO_ACCOUNT_SID,
+      process.env.TWILIO_AUTH_TOKEN
+    );
+
+    await client.messages.create({
+      body: "Test SMS depuis Limogia 🚀",
+      messagingServiceSid: process.env.TWILIO_MESSAGING_SERVICE_SID,
+      to: "+33664248605"
+    });
+
+    res.send("SMS envoyé !");
+  } catch (error) {
+    console.error(error);
+    res.send("Erreur envoi SMS");
+  }
+});
+
 
 app.listen(PORT, () => {
   console.log("Server running on port " + PORT);
