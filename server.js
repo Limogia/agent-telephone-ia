@@ -20,65 +20,16 @@ oauth2Client.setCredentials({
   refresh_token: process.env.GOOGLE_REFRESH_TOKEN,
 });
 
-/* ================= GOOGLE EVENT ================= */
-
-async function createGoogleEvent(summary, start, end) {
-  const calendar = google.calendar({ version: "v3", auth: oauth2Client });
-
-  const event = {
-    summary,
-    start: { dateTime: start, timeZone: "Europe/Paris" },
-    end: { dateTime: end, timeZone: "Europe/Paris" },
-  };
-
-  const response = await calendar.events.insert({
-    calendarId: "primary",
-    resource: event,
-  });
-
-  return response.data.htmlLink;
-}
-
-/* ================= ROUTE TEST ================= */
+/* ================= ROOT ================= */
 
 app.get("/", (req, res) => {
   res.send("Serveur actif ✅");
 });
 
-/* ================= CREATE EVENT TEST ================= */
+/* ================= VOICE (TEST TEMPORAIRE) ================= */
 
-app.get("/create-event", async (req, res) => {
-  try {
-    const link = await createGoogleEvent(
-      "Test RDV IA",
-      "2026-02-20T10:00:00",
-      "2026-02-20T10:30:00"
-    );
-
-    res.send("✅ Événement créé : " + link);
-  } catch (error) {
-    console.error(error);
-    res.send("❌ Erreur création événement");
-  }
-});
-
-/* ================= TWILIO SMS ================= */
-
-app.post("/sms", (req, res) => {
-  console.log("SMS reçu :", req.body.Body);
-
-  res.type("text/xml");
-  res.send(`
-<Response>
-  <Message>Message bien reçu 👌</Message>
-</Response>
-  `);
-});
-
-/* ================= TWILIO VOICE ================= */
-
-app.post("/voice", (req, res) => {
-  console.log("📞 Appel reçu");
+app.all("/voice", (req, res) => {
+  console.log("📞 REQUETE VOICE RECUE:", req.method);
 
   res.type("text/xml");
   res.send(`
@@ -90,8 +41,21 @@ app.post("/voice", (req, res) => {
   `);
 });
 
+/* ================= SMS ================= */
+
+app.post("/sms", (req, res) => {
+  console.log("📩 SMS RECU:", req.body.Body);
+
+  res.type("text/xml");
+  res.send(`
+<Response>
+  <Message>Message bien reçu 👌</Message>
+</Response>
+  `);
+});
+
 /* ================= START SERVER ================= */
 
 app.listen(PORT, () => {
-  console.log("Server running on port " + PORT);
+  console.log("🚀 Server running on port " + PORT);
 });
