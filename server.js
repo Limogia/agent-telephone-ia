@@ -1,22 +1,18 @@
 const express = require("express");
 
 const app = express();
-const PORT = process.env.PORT || 3000;
-
-app.use(express.urlencoded({ extended: false }));
+const PORT = process.env.PORT || 8080;
 
 app.get("/", (req, res) => {
-  res.send("OK");
+  res.status(200).send("OK");
 });
 
 app.post("/voice", (req, res) => {
-  console.log("📞 Appel Twilio reçu");
-
   res.set("Content-Type", "text/xml");
   res.status(200).send(`
 <Response>
   <Say voice="alice" language="fr-FR">
-    Bonjour, votre serveur fonctionne correctement.
+    Serveur Railway stable.
   </Say>
 </Response>
   `);
