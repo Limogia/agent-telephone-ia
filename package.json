@@ -1,11 +1,18 @@
 {
-  "name": "railway-test",
+  "name": "agent-telephone-ia",
   "version": "1.0.0",
+  "description": "",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
+  "engines": {
+    "node": "18.x"
+  },
   "dependencies": {
-    "express": "^4.18.2"
+    "express": "^4.18.2",
+    "googleapis": "^128.0.0",
+    "twilio": "^4.0.0",
+    "openai": "^4.0.0"
   }
 }
