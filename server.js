@@ -6,12 +6,14 @@ const app = express();
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
 
-/* OPENAI */
+/* ================= OPENAI ================= */
+
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
-/* GOOGLE */
+/* ================= GOOGLE ================= */
+
 const oAuth2Client = new google.auth.OAuth2(
   process.env.GOOGLE_CLIENT_ID,
   process.env.GOOGLE_CLIENT_SECRET,
@@ -27,27 +29,33 @@ const calendar = google.calendar({
   auth: oAuth2Client,
 });
 
-/* MEMORY */
+/* ================= MEMOIRE ================= */
+
 const conversations = {};
 
-/* SAFE TEXT */
-function safeText(text) {
-  if (!text) return "Je vous écoute.";
+/* ================= SECURITE XML ================= */
+
+function escapeXml(text) {
+  if (!text || typeof text !== "string") {
+    return "Je vous ecoute.";
+  }
+
   return text
     .replace(/&/g, "et")
     .replace(/</g, "")
     .replace(/>/g, "")
     .replace(/"/g, "")
-    .replace(/'/g, "")
-    .trim();
+    .replace(/'/g, "");
 }
 
-/* ROOT */
+/* ================= ROUTES ================= */
+
 app.get("/", (req, res) => {
-  res.send("Serveur actif ✅");
+  res.send("Serveur actif");
 });
 
-/* START */
+/* ================= DEMARRAGE APPEL ================= */
+
 app.post("/voice", (req, res) => {
   const callSid = req.body.CallSid;
 
@@ -55,12 +63,17 @@ app.post("/voice", (req, res) => {
     {
       role: "system",
       content: `
-Tu es une assistante téléphonique française.
-Si action nécessaire, termine par:
-CREATE|YYYY-MM-DD|HH:MM
-DELETE|YYYY-MM-DD|HH:MM
-UPDATE|OLD_DATE|OLD_TIME|NEW_DATE|NEW_TIME
-CHECK|YYYY-MM-DD|HH:MM
+Tu es une assistante telephonique francaise naturelle.
+Tu peux discuter librement.
+Tu peux creer, supprimer ou verifier un rendez vous.
+
+Quand une action est necessaire, termine ta phrase par :
+
+[CREATE date="YYYY-MM-DD" time="HH:MM"]
+[DELETE date="YYYY-MM-DD" time="HH:MM"]
+[CHECK date="YYYY-MM-DD" time="HH:MM"]
+
+Ne lis jamais ces balises a voix haute.
 `,
     },
   ];
@@ -70,100 +83,108 @@ CHECK|YYYY-MM-DD|HH:MM
 <Response>
   <Gather input="speech" language="fr-FR" action="/process-speech" method="POST">
     <Say voice="Polly.Celine-Neural" language="fr-FR">
-      Bonjour, comment puis-je vous aider ?
+      Bonjour, comment puis je vous aider ?
     </Say>
   </Gather>
 </Response>
 `);
 });
 
-/* PROCESS */
+/* ================= TRAITEMENT CONVERSATION ================= */
+
 app.post("/process-speech", async (req, res) => {
   const speech = req.body.SpeechResult || "";
   const callSid = req.body.CallSid;
 
+  if (!conversations[callSid]) {
+    conversations[callSid] = [];
+  }
+
+  conversations[callSid].push({ role: "user", content: speech });
+
   try {
-    if (!conversations[callSid]) conversations[callSid] = [];
-
-    conversations[callSid].push({ role: "user", content: speech });
-
     const completion = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       messages: conversations[callSid],
     });
 
     let reply =
-      completion?.choices?.[0]?.message?.content || "Je n'ai pas compris.";
+      completion?.choices?.[0]?.message?.content || "Je n ai pas compris.";
 
-    /* ACTION DETECTION */
-    const actionMatch = reply.match(
-      /(CREATE|DELETE|CHECK)\|(\d{4}-\d{2}-\d{2})\|(\d{2}:\d{2})|UPDATE\|(\d{4}-\d{2}-\d{2})\|(\d{2}:\d{2})\|(\d{4}-\d{2}-\d{2})\|(\d{2}:\d{2})/
-    );
+    /* ===== CREATE ===== */
+    const createMatch = reply.match(/\[CREATE date="([^"]+)" time="([^"]+)"\]/);
+    if (createMatch) {
+      const date = createMatch[1];
+      const time = createMatch[2];
+      const start = new Date(`${date}T${time}:00`);
 
-    if (actionMatch) {
-      const full = actionMatch[0];
-      const parts = full.split("|");
-      const action = parts[0];
-
-      /* CREATE */
-      if (action === "CREATE") {
-        const start = new Date(`${parts[1]}T${parts[2]}:00`);
-
-        await calendar.events.insert({
-          calendarId: "primary",
-          resource: {
-            summary: "Rendez-vous client",
-            start: { dateTime: start.toISOString(), timeZone: "Europe/Paris" },
-            end: {
-              dateTime: new Date(start.getTime() + 3600000).toISOString(),
-              timeZone: "Europe/Paris",
-            },
+      await calendar.events.insert({
+        calendarId: "primary",
+        resource: {
+          summary: "Rendez vous client",
+          start: { dateTime: start.toISOString(), timeZone: "Europe/Paris" },
+          end: {
+            dateTime: new Date(start.getTime() + 3600000).toISOString(),
+            timeZone: "Europe/Paris",
           },
-        });
+        },
+      });
 
-        reply = reply.replace(full, "Votre rendez-vous est confirmé.");
-      }
+      reply = "Votre rendez vous est confirme.";
+    }
 
-      /* DELETE */
-      if (action === "DELETE") {
-        const start = new Date(`${parts[1]}T${parts[2]}:00`);
+    /* ===== DELETE ===== */
+    const deleteMatch = reply.match(/\[DELETE date="([^"]+)" time="([^"]+)"\]/);
+    if (deleteMatch) {
+      const date = deleteMatch[1];
+      const time = deleteMatch[2];
+      const start = new Date(`${date}T${time}:00`);
 
-        const events = await calendar.events.list({
+      const events = await calendar.events.list({
+        calendarId: "primary",
+        timeMin: start.toISOString(),
+        timeMax: new Date(start.getTime() + 3600000).toISOString(),
+      });
+
+      if (events.data.items.length > 0) {
+        await calendar.events.delete({
           calendarId: "primary",
-          timeMin: start.toISOString(),
-          timeMax: new Date(start.getTime() + 3600000).toISOString(),
+          eventId: events.data.items[0].id,
         });
-
-        if (events.data.items.length > 0) {
-          await calendar.events.delete({
-            calendarId: "primary",
-            eventId: events.data.items[0].id,
-          });
-
-          reply = reply.replace(full, "Le rendez-vous a été supprimé.");
-        } else {
-          reply = "Je n'ai trouvé aucun rendez-vous.";
-        }
-      }
-
-      /* CHECK */
-      if (action === "CHECK") {
-        const start = new Date(`${parts[1]}T${parts[2]}:00`);
-
-        const events = await calendar.events.list({
-          calendarId: "primary",
-          timeMin: start.toISOString(),
-          timeMax: new Date(start.getTime() + 3600000).toISOString(),
-        });
-
-        reply =
-          events.data.items.length > 0
-            ? "Ce créneau est déjà pris."
-            : "Ce créneau est disponible.";
+        reply = "Le rendez vous a ete supprime.";
+      } else {
+        reply = "Je ne trouve aucun rendez vous a cette heure.";
       }
     }
 
-    reply = safeText(reply);
+    /* ===== CHECK ===== */
+    const checkMatch = reply.match(/\[CHECK date="([^"]+)" time="([^"]+)"\]/);
+    if (checkMatch) {
+      const date = checkMatch[1];
+      const time = checkMatch[2];
+      const start = new Date(`${date}T${time}:00`);
+
+      const events = await calendar.events.list({
+        calendarId: "primary",
+        timeMin: start.toISOString(),
+        timeMax: new Date(start.getTime() + 3600000).toISOString(),
+      });
+
+      if (events.data.items.length > 0) {
+        reply = "Ce creneau est deja pris.";
+      } else {
+        reply = "Ce creneau est disponible.";
+      }
+    }
+
+    /* ===== NETTOYAGE FINAL ===== */
+
+    reply = reply.replace(/\[.*?\]/g, "");
+    reply = escapeXml(reply);
+
+    if (!reply || reply.trim().length === 0) {
+      reply = "Je vous ecoute.";
+    }
 
     conversations[callSid].push({ role: "assistant", content: reply });
 
@@ -177,8 +198,9 @@ app.post("/process-speech", async (req, res) => {
   </Gather>
 </Response>
 `);
-  } catch (err) {
-    console.error("Erreur:", err);
+
+  } catch (error) {
+    console.error("Erreur serveur :", error);
 
     res.type("text/xml");
     res.send(`
@@ -191,7 +213,9 @@ app.post("/process-speech", async (req, res) => {
   }
 });
 
+/* ================= SERVER ================= */
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log("Serveur démarré sur " + PORT);
+  console.log("Serveur demarre sur le port " + PORT);
 });
