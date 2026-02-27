@@ -45,10 +45,11 @@ function escapeXml(text) {
     .replace(/</g, "")
     .replace(/>/g, "")
     .replace(/"/g, "")
-    .replace(/'/g, "");
+    .replace(/'/g, "")
+    .trim();
 }
 
-/* ================= ROUTES ================= */
+/* ================= ROUTE TEST ================= */
 
 app.get("/", (req, res) => {
   res.send("Serveur actif");
@@ -81,7 +82,7 @@ Ne lis jamais ces balises a voix haute.
   res.type("text/xml");
   res.send(`
 <Response>
-  <Gather input="speech" language="fr-FR" action="/process-speech" method="POST">
+  <Gather input="speech" timeout="5" speechTimeout="auto" language="fr-FR" action="/process-speech" method="POST">
     <Say voice="Polly.Celine-Neural" language="fr-FR">
       Bonjour, comment puis je vous aider ?
     </Say>
@@ -90,11 +91,24 @@ Ne lis jamais ces balises a voix haute.
 `);
 });
 
-/* ================= TRAITEMENT CONVERSATION ================= */
+/* ================= TRAITEMENT ================= */
 
 app.post("/process-speech", async (req, res) => {
-  const speech = req.body.SpeechResult || "";
+  const speech = (req.body.SpeechResult || "").trim();
   const callSid = req.body.CallSid;
+
+  if (!speech) {
+    res.type("text/xml");
+    return res.send(`
+<Response>
+  <Gather input="speech" timeout="5" speechTimeout="auto" language="fr-FR" action="/process-speech" method="POST">
+    <Say voice="Polly.Celine-Neural" language="fr-FR">
+      Je ne vous ai pas entendu, pouvez vous repeter ?
+    </Say>
+  </Gather>
+</Response>
+`);
+  }
 
   if (!conversations[callSid]) {
     conversations[callSid] = [];
@@ -112,33 +126,41 @@ app.post("/process-speech", async (req, res) => {
       completion?.choices?.[0]?.message?.content || "Je n ai pas compris.";
 
     /* ===== CREATE ===== */
+
     const createMatch = reply.match(/\[CREATE date="([^"]+)" time="([^"]+)"\]/);
     if (createMatch) {
       const date = createMatch[1];
       const time = createMatch[2];
-      const start = new Date(`${date}T${time}:00`);
 
-      await calendar.events.insert({
-        calendarId: "primary",
-        resource: {
-          summary: "Rendez vous client",
-          start: { dateTime: start.toISOString(), timeZone: "Europe/Paris" },
-          end: {
-            dateTime: new Date(start.getTime() + 3600000).toISOString(),
-            timeZone: "Europe/Paris",
+      const start = new Date(`${date}T${time}:00+01:00`);
+
+      if (!isNaN(start)) {
+        await calendar.events.insert({
+          calendarId: "primary",
+          resource: {
+            summary: "Rendez vous client",
+            start: { dateTime: start.toISOString(), timeZone: "Europe/Paris" },
+            end: {
+              dateTime: new Date(start.getTime() + 3600000).toISOString(),
+              timeZone: "Europe/Paris",
+            },
           },
-        },
-      });
+        });
 
-      reply = "Votre rendez vous est confirme.";
+        reply = "Votre rendez vous est confirme.";
+      } else {
+        reply = "La date ou l heure est invalide.";
+      }
     }
 
     /* ===== DELETE ===== */
+
     const deleteMatch = reply.match(/\[DELETE date="([^"]+)" time="([^"]+)"\]/);
     if (deleteMatch) {
       const date = deleteMatch[1];
       const time = deleteMatch[2];
-      const start = new Date(`${date}T${time}:00`);
+
+      const start = new Date(`${date}T${time}:00+01:00`);
 
       const events = await calendar.events.list({
         calendarId: "primary",
@@ -158,11 +180,13 @@ app.post("/process-speech", async (req, res) => {
     }
 
     /* ===== CHECK ===== */
+
     const checkMatch = reply.match(/\[CHECK date="([^"]+)" time="([^"]+)"\]/);
     if (checkMatch) {
       const date = checkMatch[1];
       const time = checkMatch[2];
-      const start = new Date(`${date}T${time}:00`);
+
+      const start = new Date(`${date}T${time}:00+01:00`);
 
       const events = await calendar.events.list({
         calendarId: "primary",
@@ -177,12 +201,16 @@ app.post("/process-speech", async (req, res) => {
       }
     }
 
-    /* ===== NETTOYAGE FINAL ===== */
+    /* ===== NETTOYAGE FINAL ANTI BUG TWILIO ===== */
 
-    reply = reply.replace(/\[.*?\]/g, "");
+    reply = reply.replace(/\[.*?\]/g, "").trim();
     reply = escapeXml(reply);
 
-    if (!reply || reply.trim().length === 0) {
+    if (!reply || reply.length < 2) {
+      reply = "Tres bien.";
+    }
+
+    if (typeof reply !== "string") {
       reply = "Je vous ecoute.";
     }
 
@@ -191,7 +219,7 @@ app.post("/process-speech", async (req, res) => {
     res.type("text/xml");
     res.send(`
 <Response>
-  <Gather input="speech" language="fr-FR" action="/process-speech" method="POST">
+  <Gather input="speech" timeout="5" speechTimeout="auto" language="fr-FR" action="/process-speech" method="POST">
     <Say voice="Polly.Celine-Neural" language="fr-FR">
       ${reply}
     </Say>
@@ -200,7 +228,7 @@ app.post("/process-speech", async (req, res) => {
 `);
 
   } catch (error) {
-    console.error("Erreur serveur :", error);
+    console.error("ERREUR DETAILLEE :", error.response?.data || error.message);
 
     res.type("text/xml");
     res.send(`
