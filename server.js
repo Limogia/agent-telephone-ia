@@ -77,9 +77,6 @@ app.post("/voice", (req, res) => {
       role: "system",
       content: `
 Tu es une assistante telephonique francaise naturelle.
-Tu peux discuter librement.
-Tu peux creer, supprimer ou verifier un rendez vous.
-
 Quand une action est necessaire, termine par :
 
 [CREATE date="YYYY-MM-DD" time="HH:MM"]
@@ -128,34 +125,26 @@ app.post("/process-speech", async (req, res) => {
       const date = createMatch[1];
       const time = createMatch[2];
 
-      const startDate = new Date(`${date}T${time}:00`);
-
-      if (isNaN(startDate)) {
-        reply = "La date semble invalide.";
-      } else {
-        const endDate = new Date(startDate.getTime() + 60 * 60 * 1000);
-
-        try {
-          await calendar.events.insert({
-            calendarId: "primary",
-            resource: {
-              summary: "Rendez vous client",
-              start: {
-                dateTime: startDate.toISOString(),
-                timeZone: "Europe/Paris",
-              },
-              end: {
-                dateTime: endDate.toISOString(),
-                timeZone: "Europe/Paris",
-              },
+      try {
+        await calendar.events.insert({
+          calendarId: "primary",
+          resource: {
+            summary: "Rendez vous client",
+            start: {
+              dateTime: `${date}T${time}:00`,
+              timeZone: "Europe/Paris",
             },
-          });
+            end: {
+              dateTime: `${date}T${time}:00`,
+              timeZone: "Europe/Paris",
+            },
+          },
+        });
 
-          reply = "Votre rendez vous est confirme.";
-        } catch (calendarError) {
-          console.error("ERREUR GOOGLE CREATE :", calendarError.response?.data || calendarError.message);
-          reply = "Je n arrive pas a creer le rendez vous pour le moment.";
-        }
+        reply = "Votre rendez vous est confirme.";
+      } catch (error) {
+        console.error("ERREUR GOOGLE CREATE:", error.response?.data || error.message);
+        reply = "Il y a un probleme de reservation.";
       }
     }
 
@@ -164,13 +153,14 @@ app.post("/process-speech", async (req, res) => {
     const deleteMatch = reply.match(/\[DELETE date="([^"]+)" time="([^"]+)"\]/);
 
     if (deleteMatch) {
-      const startDate = new Date(`${deleteMatch[1]}T${deleteMatch[2]}:00`);
+      const date = deleteMatch[1];
+      const time = deleteMatch[2];
 
       try {
         const events = await calendar.events.list({
           calendarId: "primary",
-          timeMin: startDate.toISOString(),
-          timeMax: new Date(startDate.getTime() + 60 * 60 * 1000).toISOString(),
+          timeMin: `${date}T${time}:00+01:00`,
+          timeMax: `${date}T${time}:59+01:00`,
         });
 
         if (events.data.items.length > 0) {
@@ -182,8 +172,8 @@ app.post("/process-speech", async (req, res) => {
         } else {
           reply = "Je ne trouve aucun rendez vous a cette heure.";
         }
-      } catch (calendarError) {
-        console.error("ERREUR GOOGLE DELETE :", calendarError.response?.data || calendarError.message);
+      } catch (error) {
+        console.error("ERREUR GOOGLE DELETE:", error.response?.data || error.message);
         reply = "Impossible de supprimer le rendez vous.";
       }
     }
@@ -193,26 +183,25 @@ app.post("/process-speech", async (req, res) => {
     const checkMatch = reply.match(/\[CHECK date="([^"]+)" time="([^"]+)"\]/);
 
     if (checkMatch) {
-      const startDate = new Date(`${checkMatch[1]}T${checkMatch[2]}:00`);
+      const date = checkMatch[1];
+      const time = checkMatch[2];
 
       try {
         const events = await calendar.events.list({
           calendarId: "primary",
-          timeMin: startDate.toISOString(),
-          timeMax: new Date(startDate.getTime() + 60 * 60 * 1000).toISOString(),
+          timeMin: `${date}T${time}:00+01:00`,
+          timeMax: `${date}T${time}:59+01:00`,
         });
 
         reply =
           events.data.items.length > 0
             ? "Ce creneau est deja pris."
             : "Ce creneau est disponible.";
-      } catch (calendarError) {
-        console.error("ERREUR GOOGLE CHECK :", calendarError.response?.data || calendarError.message);
+      } catch (error) {
+        console.error("ERREUR GOOGLE CHECK:", error.response?.data || error.message);
         reply = "Je n arrive pas a verifier ce creneau.";
       }
     }
-
-    /* ================= NETTOYAGE ================= */
 
     reply = reply.replace(/\[.*?\]/g, "").trim();
 
@@ -222,7 +211,7 @@ app.post("/process-speech", async (req, res) => {
     res.send(buildTwiML(reply));
 
   } catch (error) {
-    console.error("ERREUR OPENAI :", error.message);
+    console.error("ERREUR OPENAI:", error.message);
 
     res.type("text/xml");
     res.send(buildTwiML("Une erreur technique est survenue."));
