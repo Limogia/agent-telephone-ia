@@ -222,6 +222,18 @@ app.post("/process-speech", async (req, res) => {
   }
 });
 
+/* ================= TEST GOOGLE ================= */
+
+app.get("/test-google", async (req, res) => {
+  try {
+    const result = await calendar.calendarList.list();
+    res.json(result.data);
+  } catch (error) {
+    console.error("ERREUR GOOGLE TEST :", error.response?.data || error.message);
+    res.status(500).json({ error: error.response?.data || error.message });
+  }
+});
+
 /* ================= SERVER ================= */
 
 const PORT = process.env.PORT || 3000;
