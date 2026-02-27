@@ -186,7 +186,11 @@ app.post("/process-speech", async (req, res) => {
       }
     }
 
-    reply = escapeXml(reply);
+   reply = escapeXml(reply);
+
+if (!reply || reply.trim().length === 0) {
+  reply = "Je vous écoute.";
+}
 
     conversations[callSid].push({ role: "assistant", content: reply });
 
