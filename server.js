@@ -33,6 +33,21 @@ const calendar = google.calendar({
 
 const conversations = {};
 
+/* ================= UTIL ================= */
+
+function escapeXml(unsafe) {
+  if (!unsafe || typeof unsafe !== "string") {
+    return "Je vous écoute.";
+  }
+
+  return unsafe
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+}
+
 /* ================= ROUTES ================= */
 
 app.get("/", (req, res) => {
@@ -87,6 +102,10 @@ app.post("/process-speech", async (req, res) => {
   const speech = req.body.SpeechResult || "";
   const callSid = req.body.CallSid;
 
+  if (!conversations[callSid]) {
+    conversations[callSid] = [];
+  }
+
   conversations[callSid].push({ role: "user", content: speech });
 
   try {
@@ -95,7 +114,8 @@ app.post("/process-speech", async (req, res) => {
       messages: conversations[callSid],
     });
 
-    let reply = completion.choices[0].message.content;
+    let reply =
+      completion?.choices?.[0]?.message?.content || "Je n'ai pas compris.";
 
     /* ===== CREATE ===== */
     const createMatch = reply.match(/\[CREATE date="([^"]+)" time="([^"]+)"\]/);
@@ -111,7 +131,7 @@ app.post("/process-speech", async (req, res) => {
           summary: "Rendez-vous client",
           start: { dateTime: start.toISOString(), timeZone: "Europe/Paris" },
           end: {
-            dateTime: new Date(start.getTime() + 60 * 60 * 1000).toISOString(),
+            dateTime: new Date(start.getTime() + 3600000).toISOString(),
             timeZone: "Europe/Paris",
           },
         },
@@ -131,7 +151,7 @@ app.post("/process-speech", async (req, res) => {
       const events = await calendar.events.list({
         calendarId: "primary",
         timeMin: start.toISOString(),
-        timeMax: new Date(start.getTime() + 60 * 60 * 1000).toISOString(),
+        timeMax: new Date(start.getTime() + 3600000).toISOString(),
       });
 
       if (events.data.items.length > 0) {
@@ -141,49 +161,7 @@ app.post("/process-speech", async (req, res) => {
         });
         reply = reply.replace(/\[DELETE.*?\]/, "Le rendez-vous a été supprimé.");
       } else {
-        reply = reply.replace(/\[DELETE.*?\]/, "Je n'ai trouvé aucun rendez-vous à cette heure.");
-      }
-    }
-
-    /* ===== UPDATE ===== */
-    const updateMatch = reply.match(
-      /\[UPDATE old_date="([^"]+)" old_time="([^"]+)" new_date="([^"]+)" new_time="([^"]+)"\]/
-    );
-
-    if (updateMatch) {
-      const oldDate = updateMatch[1];
-      const oldTime = updateMatch[2];
-      const newDate = updateMatch[3];
-      const newTime = updateMatch[4];
-
-      const oldStart = new Date(`${oldDate}T${oldTime}:00`);
-
-      const events = await calendar.events.list({
-        calendarId: "primary",
-        timeMin: oldStart.toISOString(),
-        timeMax: new Date(oldStart.getTime() + 60 * 60 * 1000).toISOString(),
-      });
-
-      if (events.data.items.length > 0) {
-        const event = events.data.items[0];
-        const newStart = new Date(`${newDate}T${newTime}:00`);
-
-        await calendar.events.update({
-          calendarId: "primary",
-          eventId: event.id,
-          resource: {
-            ...event,
-            start: { dateTime: newStart.toISOString(), timeZone: "Europe/Paris" },
-            end: {
-              dateTime: new Date(newStart.getTime() + 60 * 60 * 1000).toISOString(),
-              timeZone: "Europe/Paris",
-            },
-          },
-        });
-
-        reply = reply.replace(/\[UPDATE.*?\]/, "Le rendez-vous a été modifié.");
-      } else {
-        reply = reply.replace(/\[UPDATE.*?\]/, "Je n'ai trouvé aucun rendez-vous correspondant.");
+        reply = reply.replace(/\[DELETE.*?\]/, "Je n'ai trouvé aucun rendez-vous.");
       }
     }
 
@@ -198,7 +176,7 @@ app.post("/process-speech", async (req, res) => {
       const events = await calendar.events.list({
         calendarId: "primary",
         timeMin: start.toISOString(),
-        timeMax: new Date(start.getTime() + 60 * 60 * 1000).toISOString(),
+        timeMax: new Date(start.getTime() + 3600000).toISOString(),
       });
 
       if (events.data.items.length > 0) {
@@ -207,6 +185,8 @@ app.post("/process-speech", async (req, res) => {
         reply = reply.replace(/\[CHECK.*?\]/, "Ce créneau est disponible.");
       }
     }
+
+    reply = escapeXml(reply);
 
     conversations[callSid].push({ role: "assistant", content: reply });
 
@@ -222,15 +202,14 @@ app.post("/process-speech", async (req, res) => {
     `);
 
   } catch (error) {
-    console.error(error);
+    console.error("Erreur globale :", error);
 
     res.type("text/xml");
     res.send(`
       <Response>
         <Say voice="Polly.Celine-Neural" language="fr-FR">
-          Désolé, une erreur est survenue. Pouvez-vous répéter ?
+          Désolé, une erreur technique est survenue.
         </Say>
-        <Gather input="speech" language="fr-FR" action="/process-speech" method="POST"/>
       </Response>
     `);
   }
