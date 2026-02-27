@@ -47,8 +47,10 @@ app.post("/voice", (req, res) => {
   res.type("text/xml");
   res.send(`
     <Response>
-      <Gather input="speech" action="/process-speech" method="POST">
-        <Say>Bonjour. Quel jour souhaitez-vous un rendez-vous ?</Say>
+      <Gather input="speech" language="fr-FR" action="/process-speech" method="POST">
+        <Say voice="Polly.Celine-Neural" language="fr-FR">
+          Bonjour. Quel jour souhaitez-vous un rendez-vous ?
+        </Say>
       </Gather>
     </Response>
   `);
@@ -57,17 +59,17 @@ app.post("/voice", (req, res) => {
 /* ========= ÉTAPE 2 : IA + GOOGLE ========= */
 
 app.post("/process-speech", async (req, res) => {
-  const speech = req.body.SpeechResult;
+  const speech = req.body.SpeechResult || "";
 
   try {
-    // 1️⃣ Analyse avec OpenAI
+
     const completion = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       messages: [
         {
           role: "system",
           content:
-            "Transforme la demande en JSON avec date ISO et heure format 24h. Exemple : {\"date\":\"2026-03-02\",\"time\":\"15:00\"}",
+            "Transforme la demande en JSON strict avec date ISO et heure format 24h. Exemple : {\"date\":\"2026-03-02\",\"time\":\"15:00\"}",
         },
         { role: "user", content: speech },
       ],
@@ -78,7 +80,6 @@ app.post("/process-speech", async (req, res) => {
 
     const startDateTime = new Date(`${parsed.date}T${parsed.time}:00`);
 
-    // 2️⃣ Création événement Google
     await calendar.events.insert({
       calendarId: "primary",
       resource: {
@@ -94,11 +95,12 @@ app.post("/process-speech", async (req, res) => {
       },
     });
 
-    // 3️⃣ Réponse Twilio
     res.type("text/xml");
     res.send(`
       <Response>
-        <Say>Votre rendez-vous est confirmé.</Say>
+        <Say voice="Polly.Celine-Neural" language="fr-FR">
+          Votre rendez-vous est confirmé.
+        </Say>
       </Response>
     `);
 
@@ -108,7 +110,11 @@ app.post("/process-speech", async (req, res) => {
     res.type("text/xml");
     res.send(`
       <Response>
-        <Say>Je n'ai pas compris la date. Pouvez-vous répéter ?</Say>
+        <Gather input="speech" language="fr-FR" action="/process-speech" method="POST">
+          <Say voice="Polly.Celine-Neural" language="fr-FR">
+            Je n'ai pas compris la date. Pouvez-vous répéter s'il vous plaît ?
+          </Say>
+        </Gather>
       </Response>
     `);
   }
