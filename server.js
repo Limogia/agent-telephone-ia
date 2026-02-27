@@ -1,9 +1,18 @@
 const express = require("express");
 const { google } = require("googleapis");
+const OpenAI = require("openai");
 
 const app = express();
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
+
+/* =========================
+   OPENAI CONFIG
+========================= */
+
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
 
 /* =========================
    GOOGLE OAUTH CONFIG
@@ -24,25 +33,6 @@ const calendar = google.calendar({
   auth: oAuth2Client,
 });
 
-async function createEvent() {
-  const event = {
-    summary: "Rendez-vous client",
-    start: {
-      dateTime: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
-      timeZone: "Europe/Paris",
-    },
-    end: {
-      dateTime: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString(),
-      timeZone: "Europe/Paris",
-    },
-  };
-
-  await calendar.events.insert({
-    calendarId: "primary",
-    resource: event,
-  });
-}
-
 /* =========================
    ROUTES
 ========================= */
@@ -51,29 +41,82 @@ app.get("/", (req, res) => {
   res.send("Serveur actif ✅");
 });
 
-app.post("/voice", async (req, res) => {
-  res.set("Content-Type", "text/xml");
+/* ========= ÉTAPE 1 : ÉCOUTER ========= */
+
+app.post("/voice", (req, res) => {
+  res.type("text/xml");
+  res.send(`
+    <Response>
+      <Gather input="speech" action="/process-speech" method="POST">
+        <Say>Bonjour. Quel jour souhaitez-vous un rendez-vous ?</Say>
+      </Gather>
+    </Response>
+  `);
+});
+
+/* ========= ÉTAPE 2 : IA + GOOGLE ========= */
+
+app.post("/process-speech", async (req, res) => {
+  const speech = req.body.SpeechResult;
 
   try {
-    await createEvent();
+    // 1️⃣ Analyse avec OpenAI
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [
+        {
+          role: "system",
+          content:
+            "Transforme la demande en JSON avec date ISO et heure format 24h. Exemple : {\"date\":\"2026-03-02\",\"time\":\"15:00\"}",
+        },
+        { role: "user", content: speech },
+      ],
+    });
 
+    const aiText = completion.choices[0].message.content.trim();
+    const parsed = JSON.parse(aiText);
+
+    const startDateTime = new Date(`${parsed.date}T${parsed.time}:00`);
+
+    // 2️⃣ Création événement Google
+    await calendar.events.insert({
+      calendarId: "primary",
+      resource: {
+        summary: "Rendez-vous client",
+        start: {
+          dateTime: startDateTime.toISOString(),
+          timeZone: "Europe/Paris",
+        },
+        end: {
+          dateTime: new Date(startDateTime.getTime() + 60 * 60 * 1000).toISOString(),
+          timeZone: "Europe/Paris",
+        },
+      },
+    });
+
+    // 3️⃣ Réponse Twilio
+    res.type("text/xml");
     res.send(`
-      <?xml version="1.0" encoding="UTF-8"?>
       <Response>
-        <Say>Votre rendez-vous a été ajouté au calendrier.</Say>
+        <Say>Votre rendez-vous est confirmé.</Say>
       </Response>
     `);
-  } catch (error) {
-    console.error(error);
 
+  } catch (error) {
+    console.error("Erreur IA :", error);
+
+    res.type("text/xml");
     res.send(`
-      <?xml version="1.0" encoding="UTF-8"?>
       <Response>
-        <Say>Une erreur est survenue.</Say>
+        <Say>Je n'ai pas compris la date. Pouvez-vous répéter ?</Say>
       </Response>
     `);
   }
 });
+
+/* =========================
+   SERVER
+========================= */
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
