@@ -187,7 +187,7 @@ app.post("/process-speech", async (req, res) => {
       const name = createMatch[1];
       const reason = createMatch[2];
       const [year, month, day] = createMatch[3].split("-");
-      const [hour, minute] = createMatch[4].split(":");
+      const [hour, minute] = createMatch[4].split(":"); 
 
       const start = createLocalDate(year, month, day, hour, minute);
       const end = new Date(start.getTime() + CONSULT_DURATION * 60000);
