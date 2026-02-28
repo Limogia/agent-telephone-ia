@@ -32,6 +32,7 @@ const calendar = google.calendar({
 /* ================= MEMOIRE ================= */
 
 const conversations = {};
+const lastCreatedEvent = {};
 
 /* ================= UTIL ================= */
 
@@ -54,7 +55,12 @@ function buildTwiML(message) {
 <Response>
   <Gather input="speech" timeout="5" speechTimeout="auto" language="fr-FR" action="/process-speech" method="POST">
     <Say language="fr-FR">${message}</Say>
-  </Gather>
+     <Gather input="speech"
+        timeout="8"
+        speechTimeout="3"
+        language="fr-FR"
+        action="/process-speech"
+        method="POST">
 </Response>
 `;
 }
@@ -173,27 +179,53 @@ app.post("/process-speech", async (req, res) => {
       const endDateTime = new Date(endDate.getTime() + 60 * 60 * 1000);
 
       try {
-        await calendar.events.insert({
-          calendarId: "primary",
-          resource: {
-            summary: "Rendez vous client",
-            start: {
-              dateTime: startDateTime,
-              timeZone: "Europe/Paris",
-            },
-            end: {
-              dateTime: endDateTime.toISOString(),
-              timeZone: "Europe/Paris",
-            },
-          },
-        });
 
-        reply = "Votre rendez-vous est confirmé.";
-      } catch (calendarError) {
-        console.error("ERREUR GOOGLE CREATE :", calendarError.response?.data || calendarError.message);
-        reply = "Un problème est survenu lors de la réservation.";
-      }
-    }
+  // Supprime l'ancien rendez-vous créé pendant cet appel (si existant)
+  if (lastCreatedEvent[callSid]) {
+    try {
+      await calendar.events.delete({
+        calendarId: "primary",
+        eventId: lastCreatedEvent[callSid],
+      });
+    } catch (e) {}
+  }
+
+        // Vérification disponibilité
+const existing = await calendar.events.list({
+  calendarId: "primary",
+  timeMin: startDateTime,
+  timeMax: endDateTime.toISOString(),
+  singleEvents: true,
+});
+
+if (existing.data.items.length > 0) {
+  reply = "Ce créneau est déjà réservé.";
+} else {...}
+        
+  const createdEvent = await calendar.events.insert({
+    calendarId: "primary",
+    resource: {
+      summary: "Rendez vous client",
+      start: {
+        dateTime: startDateTime,
+        timeZone: "Europe/Paris",
+      },
+      end: {
+        dateTime: endDateTime.toISOString(),
+        timeZone: "Europe/Paris",
+      },
+    },
+  });
+
+  // On stocke l'id pour pouvoir le supprimer si modification
+  lastCreatedEvent[callSid] = createdEvent.data.id;
+
+  reply = "Votre rendez-vous est confirmé.";
+
+} catch (calendarError) {
+  console.error("ERREUR GOOGLE CREATE :", calendarError.response?.data || calendarError.message);
+  reply = "Un problème est survenu lors de la réservation.";
+}
 
     /* ================= DELETE ================= */
     const deleteMatch = reply.match(/\[DELETE date="([^"]+)" time="([^"]+)"\]/);
