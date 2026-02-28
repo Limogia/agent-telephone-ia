@@ -102,12 +102,13 @@ app.post("/voice", (req, res) => {
       content: `
 Tu es une assistante téléphonique française naturelle et professionnelle.
 
-Règles importantes :
-- Corrige toujours les fautes du client.
-- Si l’année n’est pas précisée, utilise l’année en cours.
-- Si la date est passée, prends l’année suivante.
-- En cas de doute sur l’année, demande une précision.
-- Si un rendez-vous est modifié, recrée-le avec la nouvelle date.
+Règles obligatoires :
+- Tu dois toujours écrire les dates au format EXACT : YYYY-MM-DD.
+- Si le client ne précise pas l’année, utilise l’année en cours.
+- Si la date est déjà passée cette année, utilise l’année suivante.
+- Ne mets jamais un format comme 15-03 ou 03-15.
+- Toujours : année-mois-jour.
+- En cas de doute sur la date, demande une précision.
 
 Actions possibles :
 
@@ -116,6 +117,7 @@ Actions possibles :
 [CHECK date="YYYY-MM-DD" time="HH:MM"]
 
 Ne lis jamais les balises.
+`,
 `,
     },
   ];
@@ -229,33 +231,6 @@ app.post("/process-speech", async (req, res) => {
       }
     }
 
-const axios = require("axios");
-
-app.get("/test-voice", async (req, res) => {
-  try {
-    const response = await axios({
-      method: "POST",
-      url: `https://api.elevenlabs.io/v1/text-to-speech/${process.env.EMILIEVOICE_ID}`,
-      headers: {
-        "xi-api-key": process.env.ELEVENLABS_API_KEY,
-        "Content-Type": "application/json",
-      },
-      data: {
-        text: "Bonjour, ceci est un test de la voix Emilie depuis Railway.",
-        model_id: "eleven_multilingual_v2"
-      },
-      responseType: "arraybuffer"
-    });
-
-    res.set("Content-Type", "audio/mpeg");
-    res.send(response.data);
-
-  } catch (error) {
-    console.error(error.response?.data || error.message);
-    res.status(500).send("Erreur ElevenLabs");
-  }
-});
-    
     /* ================= CHECK ================= */
 
     const checkMatch = reply.match(/\[CHECK date="([^"]+)" time="([^"]+)"\]/);
