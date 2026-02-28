@@ -55,7 +55,7 @@ function buildTwiML(message) {
 <Response>
   <Gather input="speech"
           timeout="8"
-          speechTimeout="3"
+          speechTimeout="auto"
           language="fr-FR"
           action="/process-speech"
           method="POST">
@@ -103,7 +103,49 @@ Ne lis jamais les balises.
 `,
     },
   ];
+// Si la date contient déjà une année (YYYY-MM-DD) on ne touche à rien
+if (date.split("-").length === 3) {
+  // rien
+} 
+  
+// Si la date est sans année (MM-DD ou DD-MM)
+else if (date.split("-").length === 2) {
 
+  const parts = date.split("-");
+  let month, day;
+
+  if (parseInt(parts[0]) > 12) {
+    day = parts[0];
+    month = parts[1];
+  } else {
+    month = parts[0];
+    day = parts[1];
+  }
+
+  const now = new Date();
+  const currentYear = now.getFullYear();
+
+  // On compare uniquement les dates sans heure
+  const todayDateOnly = new Date(
+    now.getFullYear(),
+    now.getMonth(),
+    now.getDate()
+  );
+
+  let candidateDate = new Date(
+    currentYear,
+    parseInt(month) - 1,
+    parseInt(day)
+  );
+
+  let year = currentYear;
+
+  if (candidateDate < todayDateOnly) {
+    year = currentYear + 1;
+  }
+
+  date = `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
+}
   res.type("text/xml");
   res.send(buildTwiML("Bonjour, comment puis-je vous aider ?"));
 });
