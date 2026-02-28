@@ -84,7 +84,6 @@ async function generateSpeech(text) {
 
   fs.writeFileSync(filePath, response.data);
 
-  // nettoyage automatique après 60 secondes
   setTimeout(() => {
     if (fs.existsSync(filePath)) {
       fs.unlinkSync(filePath);
@@ -114,12 +113,11 @@ app.get("/", (req, res) => {
   res.send("Serveur actif");
 });
 
+/* 🔥 CORRECTION UNIQUEMENT ICI 🔥 */
 app.get("/test-voice", async (req, res) => {
   try {
-    const audioBase64 = await generateSpeech("Bonjour, ceci est un test de la voix Emilie depuis Railway.");
-    const buffer = Buffer.from(audioBase64, "base64");
-    res.setHeader("Content-Type", "audio/mpeg");
-    res.send(buffer);
+    const fileName = await generateSpeech("Bonjour, ceci est un test de la voix Emilie depuis Railway.");
+    res.redirect(`${process.env.BASE_URL}/audio/${fileName}`);
   } catch (error) {
     console.error("ERREUR ELEVENLABS:", error.response?.data || error.message);
     res.status(500).send("Erreur ElevenLabs");
@@ -183,8 +181,6 @@ app.post("/process-speech", async (req, res) => {
     let reply =
       completion?.choices?.[0]?.message?.content ||
       "Je n ai pas compris.";
-
-    /* === TOUTE TA LOGIQUE CREATE / DELETE / CHECK EST STRICTEMENT IDENTIQUE === */
 
     const createMatch = reply.match(/\[CREATE date="([^"]+)" time="([^"]+)"\]/);
 
