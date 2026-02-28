@@ -41,24 +41,19 @@ function nowParis() {
   );
 }
 
-/* 🔥 MODIFICATION 1 : blocage année 2027 */
 function createParisDate(year, month, day, hour, minute) {
 
   const now = nowParis();
-  const currentYear = now.getFullYear();
-
   let finalYear = parseInt(year);
 
-  // On n'autorise que l'année actuelle ou suivante
-  if (!finalYear || (finalYear !== currentYear && finalYear !== currentYear + 1)) {
-    finalYear = currentYear;
+  if (!finalYear || finalYear < now.getFullYear()) {
+    finalYear = now.getFullYear();
   }
 
   let date = new Date(finalYear, month - 1, day, hour, minute, 0);
 
-  // Si date passée → année suivante (max +1)
   if (date < now) {
-    date = new Date(currentYear + 1, month - 1, day, hour, minute, 0);
+    date = new Date(finalYear + 1, month - 1, day, hour, minute, 0);
   }
 
   return date;
@@ -128,6 +123,10 @@ const calendar = google.calendar({
 
 const conversations = {};
 
+/* ================= ETAT STRUCTURE (AJOUT) ================= */
+
+const callState = {};
+
 /* ================= TWIML ================= */
 
 function buildTwiML(message) {
@@ -177,8 +176,7 @@ RÈGLES :
 - Ne jamais inventer une disponibilité.
 - Modification = suppression puis recréation.
 - Aucun doublon.
-- Demander le nom et le motif UNIQUEMENT s'ils n'ont jamais été fournis.
-- Ne jamais redemander une information déjà donnée.
+- Toujours demander nom + motif si manquant.
 - Cabinet ouvert :
   - Lundi à vendredi 8h–18h
   - Samedi 8h–12h
@@ -191,6 +189,15 @@ GESTION DES DATES :
 - Toujours raisonner en Europe/Paris.
 - Vérifier que le jour correspond au vrai calendrier.
 
+STRUCTURE OBLIGATOIRE :
+
+1. Demander le motif UNE SEULE FOIS.
+2. Ensuite demander la date et l'heure.
+3. Ensuite créer le rendez-vous.
+4. Ne jamais redemander une information déjà obtenue.
+5. Ne jamais recommencer la conversation.
+6. Ne jamais poser deux fois la même question.
+
 Balises :
 
 [CREATE name="NOM" reason="MOTIF" date="YYYY-MM-DD" time="HH:MM"]
@@ -202,8 +209,14 @@ Ne lis jamais les balises.
     }
   ];
 
+  /* ===== INITIALISATION ETAT ===== */
+
+  callState[callSid] = {
+    step: "ASK_REASON"
+  };
+
   res.type("text/xml");
-  res.send(buildTwiML("Cabinet médical du Docteur Boutaam, bonjour. Comment puis-je vous aider ?"));
+  res.send(buildTwiML("Cabinet médical du Docteur Boutaam, bonjour. Quel est le motif de votre rendez-vous ?"));
 });
 
 /* ================= TRAITEMENT ================= */
@@ -216,6 +229,18 @@ app.post("/process-speech", async (req, res) => {
 
   if (!speech) {
     return res.type("text/xml").send(buildTwiML("Je ne vous entends plus. Bonne journée."));
+  }
+
+  const state = callState[callSid];
+
+  /* ===== STRUCTURE CONVERSATION (AJOUT) ===== */
+
+  if (state && state.step === "ASK_REASON") {
+    state.reason = speech;
+    state.step = "ASK_DATETIME";
+    return res.type("text/xml").send(
+      buildTwiML("Merci. Quelle date et heure souhaitez-vous ?")
+    );
   }
 
   conversations[callSid].push({ role: "user", content: speech });
@@ -292,6 +317,10 @@ app.post("/process-speech", async (req, res) => {
             callerNumber,
             `Bonjour ${name}, votre rendez-vous est confirmé le ${formatFR(start)} avec le Dr Boutaam.`
           );
+
+          /* ===== RESET ETAT POUR EVITER BOUCLE ===== */
+
+          delete callState[callSid];
         }
       }
     }
