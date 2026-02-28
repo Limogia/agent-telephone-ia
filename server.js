@@ -11,7 +11,7 @@ app.use(express.json());
 const TIMEZONE = "Europe/Paris";
 const CONSULT_DURATION = 30;
 
-/* ================= DATE FRANCE ================= */
+/* ================= DATE PARIS ================= */
 
 function nowParis() {
   return new Date(
@@ -29,6 +29,35 @@ function formatFR(date) {
     dateStyle: "full",
     timeStyle: "short"
   });
+}
+
+/* ================= HORAIRES CABINET ================= */
+
+function isCabinetOpen(date) {
+  const day = date.getDay(); // 0 = dimanche
+  const hour = date.getHours();
+
+  if (day === 0) return false; // dimanche fermé
+
+  if (day >= 1 && day <= 5) {
+    return hour >= 8 && hour < 18;
+  }
+
+  if (day === 6) {
+    return hour >= 8 && hour < 12;
+  }
+
+  return false;
+}
+
+function nextOpeningSlot(date) {
+  let test = new Date(date);
+
+  while (!isCabinetOpen(test)) {
+    test = new Date(test.getTime() + CONSULT_DURATION * 60000);
+  }
+
+  return test;
 }
 
 /* ================= OPENAI ================= */
@@ -101,16 +130,19 @@ Tu es la secrétaire humaine du Docteur Boutaam.
 RÈGLES :
 
 - Consultation = 30 minutes.
-- Si patient dit 9h → 09:00 EXACT.
+- Heure EXACTE demandée (9h = 09:00).
 - Format 24h uniquement.
 - Toujours vérifier le créneau EXACT demandé.
-- Ne jamais inventer de disponibilité.
+- Ne jamais inventer une disponibilité.
 - Si date absente → la déduire.
-- Si date passée → proposer année suivante.
 - Modification = suppression puis recréation.
 - Aucun doublon.
 - Toujours demander nom + motif si manquant.
-- Être naturelle.
+- Cabinet ouvert :
+  - Lundi à vendredi 8h–18h
+  - Samedi 8h–12h
+  - Dimanche fermé
+- Être naturelle et intelligente.
 
 Balises :
 
@@ -160,123 +192,52 @@ app.post("/process-speech", async (req, res) => {
       const [year, month, day] = createMatch[3].split("-");
       const [hour, minute] = createMatch[4].split(":");
 
-      const start = createParisDate(year, month, day, hour, minute);
-      const end = new Date(start.getTime() + CONSULT_DURATION * 60000);
+      let start = createParisDate(year, month, day, hour, minute);
 
-      // Vérification EXACTE
-      const existing = await calendar.events.list({
-        calendarId: "primary",
-        timeMin: start.toISOString(),
-        timeMax: end.toISOString(),
-        singleEvents: true
-      });
-
-      if (existing.data.items.length > 0) {
-
-        reply = "Ce créneau n'est pas disponible. Souhaitez-vous un autre horaire ?";
-
+      if (!isCabinetOpen(start)) {
+        const proposal = nextOpeningSlot(start);
+        reply = `Le cabinet est fermé à cet horaire. Je peux vous proposer le ${formatFR(proposal)}. Cela vous convient-il ?`;
       } else {
 
-        // Supprime ancien RDV même nom
-        const previous = await calendar.events.list({
+        const end = new Date(start.getTime() + CONSULT_DURATION * 60000);
+
+        const existing = await calendar.events.list({
           calendarId: "primary",
-          q: name,
+          timeMin: start.toISOString(),
+          timeMax: end.toISOString(),
           singleEvents: true
         });
 
-        for (let event of previous.data.items) {
-          await calendar.events.delete({
-            calendarId: "primary",
-            eventId: event.id
-          });
-        }
+        if (existing.data.items.length > 0) {
+          reply = "Ce créneau est déjà réservé. Souhaitez-vous un autre horaire ?";
+        } else {
 
-        await calendar.events.insert({
-          calendarId: "primary",
-          resource: {
-            summary: `Consultation - ${name}`,
-            description: `Patient : ${name}\nMotif : ${reason}`,
-            start: {
-              dateTime: start.toISOString(),
-              timeZone: TIMEZONE
-            },
-            end: {
-              dateTime: end.toISOString(),
-              timeZone: TIMEZONE
-            }
+          const previous = await calendar.events.list({
+            calendarId: "primary",
+            q: name,
+            singleEvents: true
+          });
+
+          for (let event of previous.data.items) {
+            await calendar.events.delete({
+              calendarId: "primary",
+              eventId: event.id
+            });
           }
-        });
 
-        reply = `Votre rendez-vous est confirmé le ${formatFR(start)}.`;
-      }
-    }
-
-    /* ================= DELETE ================= */
-
-    const deleteMatch = reply.match(/\[DELETE name="([^"]+)"\]/);
-
-    if (deleteMatch) {
-
-      const name = deleteMatch[1];
-
-      const events = await calendar.events.list({
-        calendarId: "primary",
-        q: name,
-        singleEvents: true
-      });
-
-      if (events.data.items.length === 0) {
-        reply = "Je ne trouve aucun rendez-vous à votre nom.";
-      } else {
-        for (let event of events.data.items) {
-          await calendar.events.delete({
+          await calendar.events.insert({
             calendarId: "primary",
-            eventId: event.id
+            resource: {
+              summary: `Consultation - ${name}`,
+              description: `Patient : ${name}\nMotif : ${reason}`,
+              start: { dateTime: start.toISOString(), timeZone: TIMEZONE },
+              end: { dateTime: end.toISOString(), timeZone: TIMEZONE }
+            }
           });
+
+          reply = `Votre rendez-vous est confirmé le ${formatFR(start)}.`;
         }
-        reply = "Votre rendez-vous a été supprimé.";
       }
-    }
-
-    /* ================= MODIFY ================= */
-
-    const modifyMatch = reply.match(/\[MODIFY name="([^"]+)" reason="([^"]+)" date="([^"]+)" time="([^"]+)"\]/);
-
-    if (modifyMatch) {
-
-      const name = modifyMatch[1];
-      const reason = modifyMatch[2];
-      const [year, month, day] = modifyMatch[3].split("-");
-      const [hour, minute] = modifyMatch[4].split(":");
-
-      const start = createParisDate(year, month, day, hour, minute);
-      const end = new Date(start.getTime() + CONSULT_DURATION * 60000);
-
-      // Supprime ancien
-      const previous = await calendar.events.list({
-        calendarId: "primary",
-        q: name,
-        singleEvents: true
-      });
-
-      for (let event of previous.data.items) {
-        await calendar.events.delete({
-          calendarId: "primary",
-          eventId: event.id
-        });
-      }
-
-      await calendar.events.insert({
-        calendarId: "primary",
-        resource: {
-          summary: `Consultation - ${name}`,
-          description: `Patient : ${name}\nMotif : ${reason}`,
-          start: { dateTime: start.toISOString(), timeZone: TIMEZONE },
-          end: { dateTime: end.toISOString(), timeZone: TIMEZONE }
-        }
-      });
-
-      reply = `Votre rendez-vous a été déplacé au ${formatFR(start)}.`;
     }
 
     reply = reply.replace(/\[.*?\]/g, "").trim();
