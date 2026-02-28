@@ -8,8 +8,16 @@ app.use(express.json());
 
 /* ================= CONFIG ================= */
 
-const CONSULTATION_DURATION_MIN = 30;
-const CURRENT_YEAR = 2026;
+const CONSULTATION_DURATION = 30; // minutes
+const TIMEZONE = "Europe/Paris";
+
+/* ================= DATE FRANÇAISE TEMPS RÉEL ================= */
+
+function getFrenchNow() {
+  return new Date(
+    new Date().toLocaleString("en-US", { timeZone: TIMEZONE })
+  );
+}
 
 /* ================= OPENAI ================= */
 
@@ -37,20 +45,9 @@ const calendar = google.calendar({
 /* ================= MEMOIRE ================= */
 
 const conversations = {};
-const sessionData = {}; // stocke nom + motif + date pendant appel
+const sessions = {};
 
-/* ================= UTIL ================= */
-
-function escapeXml(text) {
-  if (!text) return "Très bien.";
-  return text
-    .replace(/&/g, "et")
-    .replace(/</g, "")
-    .replace(/>/g, "")
-    .replace(/"/g, "")
-    .replace(/'/g, "")
-    .trim();
-}
+/* ================= TWIML ================= */
 
 function buildTwiML(message) {
   return `
@@ -61,7 +58,7 @@ function buildTwiML(message) {
           language="fr-FR"
           action="/process-speech"
           method="POST">
-    <Say language="fr-FR">${escapeXml(message)}</Say>
+    <Say language="fr-FR">${message}</Say>
   </Gather>
   <Hangup/>
 </Response>
@@ -71,53 +68,54 @@ function buildTwiML(message) {
 /* ================= ROUTE TEST ================= */
 
 app.get("/", (req, res) => {
-  res.send("Secrétariat médical Dr Boutaam actif");
+  res.send("Cabinet médical Dr Boutaam actif");
 });
 
 /* ================= APPEL INITIAL ================= */
 
 app.post("/voice", (req, res) => {
   const callSid = req.body.CallSid;
+  const now = getFrenchNow();
 
-  sessionData[callSid] = {
+  sessions[callSid] = {
     name: null,
     reason: null,
-    date: null,
-    time: null,
   };
 
   conversations[callSid] = [
     {
       role: "system",
       content: `
-Nous sommes en ${CURRENT_YEAR}.
+Nous sommes le ${now.toLocaleDateString("fr-FR")} et il est ${now.toLocaleTimeString("fr-FR")}.
+Fuseau horaire obligatoire : Europe/Paris.
 
-Tu es la secrétaire médicale du Docteur Boutaam.
-Tu es naturelle, professionnelle et chaleureuse.
+Tu es la secrétaire médicale humaine du Docteur Boutaam.
 
 Tu dois :
 - Prendre un rendez-vous.
 - Demander le nom du patient.
 - Demander le motif de consultation.
-- Déduire la date si possible.
-- Demander clarification si doute.
-- Proposer un autre créneau si indisponible.
-- Une consultation dure ${CONSULTATION_DURATION_MIN} minutes.
+- Déduire la date si elle n'est pas précisée.
+- Si doute, poser la question.
+- Une consultation dure 30 minutes.
+- Proposer un créneau si celui demandé n'est pas disponible.
 - Toujours écrire les dates au format YYYY-MM-DD.
-- Si le patient ne donne pas d'année, utilise ${CURRENT_YEAR}.
-- Si la date est passée en ${CURRENT_YEAR}, propose l'année suivante.
+- Si année absente, utiliser 2026.
+- Si date passée en 2026, proposer 2027.
 
-Quand toutes les informations sont réunies, termine par :
+Quand toutes les informations sont réunies, terminer par :
 
 [CREATE date="YYYY-MM-DD" time="HH:MM"]
 
+Tu es naturelle, intelligente, avec de la répartie.
+Tu peux répondre à toute question même hors rendez-vous.
 Ne lis jamais les balises.
 `,
     },
   ];
 
   res.type("text/xml");
-  res.send(buildTwiML("Cabinet médical du Docteur Boutaam, bonjour. Que puis-je faire pour vous ?"));
+  res.send(buildTwiML("Cabinet médical du Docteur Boutaam, bonjour. Comment puis-je vous aider ?"));
 });
 
 /* ================= TRAITEMENT ================= */
@@ -150,42 +148,45 @@ app.post("/process-speech", async (req, res) => {
       const [y, m, d] = date.split("-");
       const [hh, mm] = time.split(":");
 
-      const startDate = new Date(y, m - 1, d, hh, mm);
-      const endDate = new Date(startDate.getTime() + CONSULTATION_DURATION_MIN * 60000);
+      const start = new Date(
+        new Date(y, m - 1, d, hh, mm).toLocaleString("en-US", {
+          timeZone: TIMEZONE,
+        })
+      );
 
-      // Vérifie disponibilité
+      const end = new Date(start.getTime() + CONSULTATION_DURATION * 60000);
+
       const existing = await calendar.events.list({
         calendarId: "primary",
-        timeMin: startDate.toISOString(),
-        timeMax: endDate.toISOString(),
+        timeMin: start.toISOString(),
+        timeMax: end.toISOString(),
         singleEvents: true,
       });
 
       if (existing.data.items.length > 0) {
-        reply = "Ce créneau n'est malheureusement pas disponible. Souhaitez-vous un autre horaire ?";
+        reply = "Ce créneau n'est pas disponible. Souhaitez-vous un autre horaire ?";
       } else {
         await calendar.events.insert({
           calendarId: "primary",
           resource: {
-            summary: `Consultation - ${sessionData[callSid]?.name || "Patient"}`,
-            description: `Motif : ${sessionData[callSid]?.reason || "Non précisé"}`,
+            summary: `Consultation - ${sessions[callSid]?.name || "Patient"}`,
+            description: `Motif : ${sessions[callSid]?.reason || "Non précisé"}`,
             start: {
-              dateTime: startDate.toISOString(),
-              timeZone: "Europe/Paris",
+              dateTime: start.toISOString(),
+              timeZone: TIMEZONE,
             },
             end: {
-              dateTime: endDate.toISOString(),
-              timeZone: "Europe/Paris",
+              dateTime: end.toISOString(),
+              timeZone: TIMEZONE,
             },
           },
         });
 
-        reply = "Votre rendez-vous est confirmé. Nous vous attendrons au cabinet du Docteur Boutaam.";
+        reply = "Votre rendez-vous est confirmé. Le Docteur Boutaam vous recevra au cabinet.";
       }
     }
 
     reply = reply.replace(/\[.*?\]/g, "").trim();
-
     conversations[callSid].push({ role: "assistant", content: reply });
 
     res.type("text/xml");
@@ -201,5 +202,5 @@ app.post("/process-speech", async (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log("Serveur Dr Boutaam démarré sur port " + PORT);
+  console.log("Secrétariat Dr Boutaam démarré sur port " + PORT);
 });
