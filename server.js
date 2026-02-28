@@ -10,9 +10,9 @@ app.use(express.json());
 
 const TIMEZONE = "Europe/Paris";
 const CONSULT_DURATION = 30; // minutes
-const CURRENT_DATE = "2026-02-28";
+const CURRENT_YEAR = 2026;
 
-/* ================= DATE FRANCE ================= */
+/* ================= DATE PARIS ================= */
 
 function nowParis() {
   return new Date(
@@ -20,8 +20,10 @@ function nowParis() {
   );
 }
 
-function toISO(date) {
-  return new Date(date).toISOString();
+function buildParisDate(year, month, day, hour, minute) {
+  return new Date(
+    Date.UTC(year, month - 1, day, hour - 0, minute - 0)
+  );
 }
 
 function formatFR(date) {
@@ -58,7 +60,7 @@ const calendar = google.calendar({
 /* ================= MEMOIRE ================= */
 
 const conversations = {};
-const sessionData = {};
+const patientSessions = {};
 
 /* ================= TWIML ================= */
 
@@ -81,16 +83,16 @@ function buildTwiML(message) {
 /* ================= ROUTE ================= */
 
 app.get("/", (req, res) => {
-  res.send("Cabinet médical Dr Boutaam actif");
+  res.send("Cabinet Dr Boutaam actif");
 });
 
-/* ================= APPEL ================= */
+/* ================= APPEL INITIAL ================= */
 
 app.post("/voice", (req, res) => {
 
   const callSid = req.body.CallSid;
 
-  sessionData[callSid] = {
+  patientSessions[callSid] = {
     name: null,
     reason: null,
   };
@@ -99,30 +101,32 @@ app.post("/voice", (req, res) => {
     {
       role: "system",
       content: `
-Nous sommes le ${CURRENT_DATE}.
-Fuseau horaire obligatoire : Europe/Paris.
+Nous sommes le 28 février 2026.
+Fuseau obligatoire : Europe/Paris.
 
-Tu es la secrétaire médicale humaine du Docteur Boutaam.
+Tu es la secrétaire humaine du Docteur Boutaam.
 
-Règles strictes :
+Règles ABSOLUES :
+
 - Consultation = 30 minutes.
-- Toujours format 24h.
-- Si le patient dit 9h → c’est 09:00.
+- Heure exacte demandée (9h = 09:00).
+- Format 24h uniquement.
 - Si année absente → 2026.
-- Si date déjà passée en 2026 → proposer 2027.
-- Toujours vérifier EXACTEMENT le créneau demandé.
+- Si date passée en 2026 → 2027.
+- Toujours vérifier le créneau EXACT demandé.
 - Ne jamais inventer une disponibilité.
-- Toujours consulter le calendrier réel.
-- Si modification → supprimer ancien RDV puis recréer.
-- Un patient ne peut supprimer que son propre RDV.
+- Toujours vérifier le calendrier réel.
+- Modification = suppression puis recréation.
+- Aucun doublon.
+- Un patient ne peut gérer que SON rendez-vous.
 - Toujours demander nom + motif si manquant.
-- Être naturelle, fluide, intelligente.
+- Être naturelle et conversationnelle.
 
 Balises :
 
 [CREATE name="NOM" reason="MOTIF" date="YYYY-MM-DD" time="HH:MM"]
 [DELETE name="NOM"]
-[MODIFY name="NOM" date="YYYY-MM-DD" time="HH:MM"]
+[MODIFY name="NOM" reason="MOTIF" date="YYYY-MM-DD" time="HH:MM"]
 
 Ne lis jamais les balises.
 `,
@@ -163,60 +167,49 @@ app.post("/process-speech", async (req, res) => {
 
       const name = createMatch[1];
       const reason = createMatch[2];
-      const date = createMatch[3];
-      const time = createMatch[4];
+      let [year, month, day] = createMatch[3].split("-");
+      const [hour, minute] = createMatch[4].split(":");
 
-      const [year, month, day] = date.split("-");
-      const [hour, minute] = time.split(":");
+      year = parseInt(year) || CURRENT_YEAR;
 
-      const start = new Date(year, month - 1, day, hour, minute);
+      const start = buildParisDate(year, month, day, hour, minute);
       const end = new Date(start.getTime() + CONSULT_DURATION * 60000);
 
-      // Vérification exacte du créneau demandé
+      // Vérification exacte créneau
       const existing = await calendar.events.list({
         calendarId: "primary",
-        timeMin: toISO(start),
-        timeMax: toISO(end),
+        timeMin: start.toISOString(),
+        timeMax: end.toISOString(),
         singleEvents: true,
       });
 
       if (existing.data.items.length > 0) {
 
-        // Recherche prochain créneau libre
-        let candidate = new Date(start);
-        let found = false;
-
-        for (let i = 1; i <= 16; i++) {
-          candidate = new Date(start.getTime() + i * CONSULT_DURATION * 60000);
-          const candidateEnd = new Date(candidate.getTime() + CONSULT_DURATION * 60000);
-
-          const check = await calendar.events.list({
-            calendarId: "primary",
-            timeMin: toISO(candidate),
-            timeMax: toISO(candidateEnd),
-            singleEvents: true,
-          });
-
-          if (check.data.items.length === 0) {
-            reply = `Le créneau demandé n'est pas disponible. Je peux vous proposer le ${formatFR(candidate)}. Cela vous convient-il ?`;
-            found = true;
-            break;
-          }
-        }
-
-        if (!found) {
-          reply = "Je n'ai pas de disponibilité proche. Souhaitez-vous un autre jour ?";
-        }
+        reply = "Ce créneau n'est pas disponible. Souhaitez-vous un autre horaire ?";
 
       } else {
+
+        // Supprime ancien RDV même nom (anti doublon)
+        const previous = await calendar.events.list({
+          calendarId: "primary",
+          q: name,
+          singleEvents: true,
+        });
+
+        for (let event of previous.data.items) {
+          await calendar.events.delete({
+            calendarId: "primary",
+            eventId: event.id,
+          });
+        }
 
         await calendar.events.insert({
           calendarId: "primary",
           resource: {
             summary: `Consultation - ${name}`,
             description: `Patient : ${name}\nMotif : ${reason}`,
-            start: { dateTime: toISO(start), timeZone: TIMEZONE },
-            end: { dateTime: toISO(end), timeZone: TIMEZONE },
+            start: { dateTime: start.toISOString(), timeZone: TIMEZONE },
+            end: { dateTime: end.toISOString(), timeZone: TIMEZONE },
           },
         });
 
@@ -241,57 +234,57 @@ app.post("/process-speech", async (req, res) => {
       if (events.data.items.length === 0) {
         reply = "Je ne trouve aucun rendez-vous à votre nom.";
       } else {
-        await calendar.events.delete({
-          calendarId: "primary",
-          eventId: events.data.items[0].id,
-        });
-
+        for (let event of events.data.items) {
+          await calendar.events.delete({
+            calendarId: "primary",
+            eventId: event.id,
+          });
+        }
         reply = "Votre rendez-vous a été supprimé.";
       }
     }
 
     /* ================= MODIFY ================= */
 
-    const modifyMatch = reply.match(/\[MODIFY name="([^"]+)" date="([^"]+)" time="([^"]+)"\]/);
+    const modifyMatch = reply.match(/\[MODIFY name="([^"]+)" reason="([^"]+)" date="([^"]+)" time="([^"]+)"\]/);
 
     if (modifyMatch) {
 
       const name = modifyMatch[1];
-      const date = modifyMatch[2];
-      const time = modifyMatch[3];
+      const reason = modifyMatch[2];
+      let [year, month, day] = modifyMatch[3].split("-");
+      const [hour, minute] = modifyMatch[4].split(":");
 
-      const events = await calendar.events.list({
+      year = parseInt(year) || CURRENT_YEAR;
+
+      const start = buildParisDate(year, month, day, hour, minute);
+      const end = new Date(start.getTime() + CONSULT_DURATION * 60000);
+
+      // Supprime ancien
+      const previous = await calendar.events.list({
         calendarId: "primary",
         q: name,
         singleEvents: true,
       });
 
-      if (events.data.items.length === 0) {
-        reply = "Je ne trouve aucun rendez-vous à modifier.";
-      } else {
-
+      for (let event of previous.data.items) {
         await calendar.events.delete({
           calendarId: "primary",
-          eventId: events.data.items[0].id,
+          eventId: event.id,
         });
-
-        const [y, m, d] = date.split("-");
-        const [hh, mm] = time.split(":");
-
-        const start = new Date(y, m - 1, d, hh, mm);
-        const end = new Date(start.getTime() + CONSULT_DURATION * 60000);
-
-        await calendar.events.insert({
-          calendarId: "primary",
-          resource: {
-            summary: `Consultation - ${name}`,
-            start: { dateTime: toISO(start), timeZone: TIMEZONE },
-            end: { dateTime: toISO(end), timeZone: TIMEZONE },
-          },
-        });
-
-        reply = `Votre rendez-vous a été déplacé au ${formatFR(start)}.`;
       }
+
+      await calendar.events.insert({
+        calendarId: "primary",
+        resource: {
+          summary: `Consultation - ${name}`,
+          description: `Patient : ${name}\nMotif : ${reason}`,
+          start: { dateTime: start.toISOString(), timeZone: TIMEZONE },
+          end: { dateTime: end.toISOString(), timeZone: TIMEZONE },
+        },
+      });
+
+      reply = `Votre rendez-vous a été déplacé au ${formatFR(start)}.`;
     }
 
     reply = reply.replace(/\[.*?\]/g, "").trim();
