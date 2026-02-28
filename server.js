@@ -1,6 +1,7 @@
 const express = require("express");
 const { google } = require("googleapis");
 const OpenAI = require("openai");
+const twilio = require("twilio"); // ✅ AJOUT
 
 const app = express();
 app.use(express.urlencoded({ extended: false }));
@@ -10,6 +11,27 @@ app.use(express.json());
 
 const TIMEZONE = "Europe/Paris";
 const CONSULT_DURATION = 30;
+
+/* ================= TWILIO SMS CONFIG ================= */ // ✅ AJOUT
+
+const twilioClient = twilio(
+  process.env.TWILIO_ACCOUNT_SID,
+  process.env.TWILIO_AUTH_TOKEN
+);
+
+async function sendConfirmationSMS(to, message) {
+  try {
+    await twilioClient.messages.create({
+      messagingServiceSid: process.env.TWILIO_MESSAGING_SERVICE_SID,
+      to: to,
+      body: message
+    });
+
+    console.log("SMS envoyé avec succès à " + to);
+  } catch (error) {
+    console.error("Erreur envoi SMS:", error.message);
+  }
+}
 
 /* ================= DATE PARIS ================= */
 
@@ -34,10 +56,10 @@ function formatFR(date) {
 /* ================= HORAIRES CABINET ================= */
 
 function isCabinetOpen(date) {
-  const day = date.getDay(); // 0 = dimanche
+  const day = date.getDay();
   const hour = date.getHours();
 
-  if (day === 0) return false; // dimanche fermé
+  if (day === 0) return false;
 
   if (day >= 1 && day <= 5) {
     return hour >= 8 && hour < 18;
@@ -165,6 +187,7 @@ app.post("/process-speech", async (req, res) => {
 
   const speech = (req.body.SpeechResult || "").trim();
   const callSid = req.body.CallSid;
+  const callerNumber = req.body.From; // ✅ AJOUT (numéro patient)
 
   if (!speech) {
     return res.type("text/xml").send(buildTwiML("Je ne vous entends plus. Bonne journée."));
@@ -180,8 +203,6 @@ app.post("/process-speech", async (req, res) => {
     });
 
     let reply = completion.choices[0].message.content;
-
-    /* ================= CREATE ================= */
 
     const createMatch = reply.match(/\[CREATE name="([^"]+)" reason="([^"]+)" date="([^"]+)" time="([^"]+)"\]/);
 
@@ -236,6 +257,12 @@ app.post("/process-speech", async (req, res) => {
           });
 
           reply = `Votre rendez-vous est confirmé le ${formatFR(start)}.`;
+
+          // ✅ ENVOI SMS AUTOMATIQUE
+          await sendConfirmationSMS(
+            callerNumber,
+            `Bonjour ${name}, votre rendez-vous est confirmé le ${formatFR(start)} avec le Dr Boutaam.`
+          );
         }
       }
     }
