@@ -1,6 +1,7 @@
 const express = require("express");
 const { google } = require("googleapis");
 const OpenAI = require("openai");
+const axios = require("axios"); // <-- AJOUT NECESSAIRE
 
 const app = express();
 app.use(express.urlencoded({ extended: false }));
@@ -65,6 +66,37 @@ function buildTwiML(message) {
 
 app.get("/", (req, res) => {
   res.send("Serveur actif");
+});
+
+/* ================= TEST ELEVENLABS ================= */
+
+app.get("/test-voice", async (req, res) => {
+  try {
+    const response = await axios({
+      method: "POST",
+      url: `https://api.elevenlabs.io/v1/text-to-speech/${process.env.EMILIEVOICE_ID}`,
+      headers: {
+        "xi-api-key": process.env.ELEVENLABS_API_KEY,
+        "Content-Type": "application/json"
+      },
+      data: {
+        text: "Bonjour, ceci est un test de la voix Emilie depuis Railway.",
+        model_id: "eleven_multilingual_v2",
+        voice_settings: {
+          stability: 0.7,
+          similarity_boost: 0.85
+        }
+      },
+      responseType: "arraybuffer"
+    });
+
+    res.setHeader("Content-Type", "audio/mpeg");
+    res.send(response.data);
+
+  } catch (error) {
+    console.error("ERREUR ELEVENLABS:", error.response?.data || error.message);
+    res.status(500).send("Erreur ElevenLabs");
+  }
 });
 
 /* ================= APPEL INITIAL ================= */
