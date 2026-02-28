@@ -32,11 +32,12 @@ const calendar = google.calendar({
 /* ================= MEMOIRE ================= */
 
 const conversations = {};
+const lastEventByCall = {};
 
 /* ================= UTIL ================= */
 
 function escapeXml(text) {
-  if (!text || typeof text !== "string") return "Je vous ecoute.";
+  if (!text || typeof text !== "string") return "Je vous écoute.";
   return text
     .replace(/&/g, "et")
     .replace(/</g, "")
@@ -46,17 +47,39 @@ function escapeXml(text) {
     .trim();
 }
 
+function cleanFrench(text) {
+  if (!text) return text;
+  return text
+    .replace(/\bconfirme\b/gi, "confirmé")
+    .replace(/\bsupprime\b/gi, "supprimé")
+    .replace(/\bmodifie\b/gi, "modifié")
+    .replace(/\bcree\b/gi, "créé")
+    .replace(/\bete\b/gi, "été")
+    .replace(/\ba ete\b/gi, "a été");
+}
+
 function buildTwiML(message) {
   message = escapeXml(message);
-  if (!message || message.length < 2) message = "Tres bien.";
+  if (!message || message.length < 2) message = "Très bien.";
 
   return `
 <Response>
-  <Gather input="speech" timeout="5" speechTimeout="auto" language="fr-FR" action="/process-speech" method="POST">
-    <Say voice="Polly.Celine" language="fr-FR">
+  <Gather 
+      input="speech"
+      timeout="12"
+      speechTimeout="6"
+      language="fr-FR"
+      action="/process-speech"
+      method="POST">
+    <Say language="fr-FR">
       ${message}
     </Say>
   </Gather>
+
+  <Say language="fr-FR">
+    Je suis toujours à votre écoute.
+  </Say>
+  <Redirect method="POST">/voice</Redirect>
 </Response>
 `;
 }
@@ -71,38 +94,26 @@ app.get("/", (req, res) => {
 
 app.post("/voice", (req, res) => {
   const callSid = req.body.CallSid;
-  const today = new Date().toISOString().split("T")[0];
 
   conversations[callSid] = [
     {
       role: "system",
       content: `
-Tu es une assistante telephonique francaise naturelle.
-
-La date actuelle est : ${today}
-
-REGLES IMPORTANTES :
-
-- Si l utilisateur ne precise pas l annee, utilise l annee en cours.
-- Si la date est deja passee cette annee, utilise l annee suivante.
-- Si la date est relative (demain, lundi prochain, dans deux semaines), convertis en date exacte.
-- Si on parle du meme rendez vous, ne le recrée jamais.
-- Si meme date et meme heure existent deja, confirme simplement.
-
-Quand une action est necessaire, termine STRICTEMENT par :
+Tu es une assistante téléphonique française naturelle.
+Quand une action est nécessaire, termine par :
 
 [CREATE date="YYYY-MM-DD" time="HH:MM"]
 [DELETE date="YYYY-MM-DD" time="HH:MM"]
 [CHECK date="YYYY-MM-DD" time="HH:MM"]
 
 Ne lis jamais les balises.
-Ne mets rien apres les balises.
+Si on modifie un rendez-vous, il faut déplacer l'existant et ne jamais en recréer un.
 `,
     },
   ];
 
   res.type("text/xml");
-  res.send(buildTwiML("Bonjour, comment puis je vous aider ?"));
+  res.send(buildTwiML("Bonjour, comment puis-je vous aider ?"));
 });
 
 /* ================= TRAITEMENT ================= */
@@ -113,7 +124,7 @@ app.post("/process-speech", async (req, res) => {
 
   if (!speech) {
     res.type("text/xml");
-    return res.send(buildTwiML("Je ne vous ai pas entendu, pouvez vous repeter ?"));
+    return res.send(buildTwiML("Je ne vous ai pas entendu, pouvez-vous répéter ?"));
   }
 
   if (!conversations[callSid]) conversations[callSid] = [];
@@ -126,9 +137,11 @@ app.post("/process-speech", async (req, res) => {
       messages: conversations[callSid],
     });
 
-    let reply = completion?.choices?.[0]?.message?.content || "Je n ai pas compris.";
+    let reply =
+      completion?.choices?.[0]?.message?.content ||
+      "Je n'ai pas compris.";
 
-    /* ================= CREATE INTELLIGENT ================= */
+    /* ================= CREATE / MOVE ================= */
 
     const createMatch = reply.match(/\[CREATE date="([^"]+)" time="([^"]+)"\]/);
 
@@ -136,52 +149,43 @@ app.post("/process-speech", async (req, res) => {
       const date = createMatch[1];
       const time = createMatch[2];
 
-      const startISO = new Date(`${date}T${time}:00`).toISOString();
-      const endISO = new Date(new Date(startISO).getTime() + 60 * 60 * 1000).toISOString();
+      const startLocal = `${date}T${time}:00`;
+      const endDate = new Date(startLocal);
+      endDate.setHours(endDate.getHours() + 1);
+
+      const endLocal =
+        `${date}T${String(endDate.getHours()).padStart(2,"0")}:${String(endDate.getMinutes()).padStart(2,"0")}:00`;
 
       try {
-        const existingEvents = await calendar.events.list({
-          calendarId: "primary",
-          timeMin: startISO,
-          timeMax: endISO,
-          singleEvents: true,
-        });
-
-        if (existingEvents.data.items.length > 0) {
-          const existingEvent = existingEvents.data.items[0];
-          const existingStart = new Date(existingEvent.start.dateTime).toISOString();
-          const existingEnd = new Date(existingEvent.end.dateTime).toISOString();
-
-          if (existingStart === startISO && existingEnd === endISO) {
-            reply = "Ce rendez vous existe deja.";
-          } else {
-            await calendar.events.update({
-              calendarId: "primary",
-              eventId: existingEvent.id,
-              requestBody: {
-                summary: "Rendez vous client",
-                start: { dateTime: startISO, timeZone: "Europe/Paris" },
-                end: { dateTime: endISO, timeZone: "Europe/Paris" },
-              },
-            });
-
-            reply = "Votre rendez vous a ete modifie.";
-          }
-        } else {
-          await calendar.events.insert({
+        if (lastEventByCall[callSid]) {
+          await calendar.events.update({
             calendarId: "primary",
-            requestBody: {
-              summary: "Rendez vous client",
-              start: { dateTime: startISO, timeZone: "Europe/Paris" },
-              end: { dateTime: endISO, timeZone: "Europe/Paris" },
+            eventId: lastEventByCall[callSid],
+            resource: {
+              summary: "Rendez-vous client",
+              start: { dateTime: startLocal, timeZone: "Europe/Paris" },
+              end: { dateTime: endLocal, timeZone: "Europe/Paris" },
             },
           });
 
-          reply = "Votre rendez vous est confirme.";
+          reply = "Votre rendez-vous a été déplacé.";
+        } else {
+          const event = await calendar.events.insert({
+            calendarId: "primary",
+            resource: {
+              summary: "Rendez-vous client",
+              start: { dateTime: startLocal, timeZone: "Europe/Paris" },
+              end: { dateTime: endLocal, timeZone: "Europe/Paris" },
+            },
+          });
+
+          lastEventByCall[callSid] = event.data.id;
+          reply = "Votre rendez-vous est confirmé.";
         }
+
       } catch (calendarError) {
         console.error("ERREUR GOOGLE CREATE :", calendarError.response?.data || calendarError.message);
-        reply = "Il y a un probleme de reservation.";
+        reply = "Il y a un problème de réservation.";
       }
     }
 
@@ -189,33 +193,17 @@ app.post("/process-speech", async (req, res) => {
 
     const deleteMatch = reply.match(/\[DELETE date="([^"]+)" time="([^"]+)"\]/);
 
-    if (deleteMatch) {
-      const date = deleteMatch[1];
-      const time = deleteMatch[2];
-
+    if (deleteMatch && lastEventByCall[callSid]) {
       try {
-        const startISO = new Date(`${date}T${time}:00`).toISOString();
-        const endISO = new Date(new Date(startISO).getTime() + 60 * 60 * 1000).toISOString();
-
-        const events = await calendar.events.list({
+        await calendar.events.delete({
           calendarId: "primary",
-          timeMin: startISO,
-          timeMax: endISO,
-          singleEvents: true,
+          eventId: lastEventByCall[callSid],
         });
 
-        if (events.data.items.length > 0) {
-          await calendar.events.delete({
-            calendarId: "primary",
-            eventId: events.data.items[0].id,
-          });
-          reply = "Le rendez vous a ete supprime.";
-        } else {
-          reply = "Je ne trouve aucun rendez vous a cette heure.";
-        }
+        delete lastEventByCall[callSid];
+        reply = "Le rendez-vous a été supprimé.";
       } catch (error) {
-        console.error("ERREUR GOOGLE DELETE:", error.response?.data || error.message);
-        reply = "Impossible de supprimer le rendez vous.";
+        reply = "Impossible de supprimer le rendez-vous.";
       }
     }
 
@@ -227,28 +215,25 @@ app.post("/process-speech", async (req, res) => {
       const date = checkMatch[1];
       const time = checkMatch[2];
 
-      try {
-        const startISO = new Date(`${date}T${time}:00`).toISOString();
-        const endISO = new Date(new Date(startISO).getTime() + 60 * 60 * 1000).toISOString();
+      const startLocal = `${date}T${time}:00`;
+      const endDate = new Date(startLocal);
+      endDate.setHours(endDate.getHours() + 1);
 
-        const events = await calendar.events.list({
-          calendarId: "primary",
-          timeMin: startISO,
-          timeMax: endISO,
-          singleEvents: true,
-        });
+      const events = await calendar.events.list({
+        calendarId: "primary",
+        timeMin: startLocal,
+        timeMax: endDate.toISOString(),
+        singleEvents: true,
+      });
 
-        reply =
-          events.data.items.length > 0
-            ? "Ce creneau est deja pris."
-            : "Ce creneau est disponible.";
-      } catch (error) {
-        console.error("ERREUR GOOGLE CHECK:", error.response?.data || error.message);
-        reply = "Je n arrive pas a verifier ce creneau.";
-      }
+      reply =
+        events.data.items.length > 0
+          ? "Ce créneau est déjà pris."
+          : "Ce créneau est disponible.";
     }
 
     reply = reply.replace(/\[.*?\]/g, "").trim();
+    reply = cleanFrench(reply);
 
     conversations[callSid].push({ role: "assistant", content: reply });
 
@@ -257,6 +242,7 @@ app.post("/process-speech", async (req, res) => {
 
   } catch (error) {
     console.error("ERREUR OPENAI:", error.message);
+
     res.type("text/xml");
     res.send(buildTwiML("Une erreur technique est survenue."));
   }
@@ -266,5 +252,5 @@ app.post("/process-speech", async (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log("Serveur demarre sur le port " + PORT);
+  console.log("Serveur démarré sur le port " + PORT);
 });
