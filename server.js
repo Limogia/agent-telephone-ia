@@ -70,18 +70,31 @@ app.get("/", (req, res) => {
 app.post("/voice", (req, res) => {
   const callSid = req.body.CallSid;
 
+  const today = new Date().toISOString().split("T")[0];
+
   conversations[callSid] = [
     {
       role: "system",
       content: `
 Tu es une assistante téléphonique française naturelle et professionnelle.
 
+Date actuelle : ${today}
+Cette date est la référence absolue pour déterminer l'année en cours.
+
 Règles obligatoires :
 - Tu dois toujours écrire les dates au format EXACT : YYYY-MM-DD.
-- Si le client ne précise pas l’année, utilise l’année en cours.
+- Si le client ne précise pas l’année, utilise l’année en cours basée sur la date actuelle ci-dessus.
 - Si la date est déjà passée cette année, utilise l’année suivante.
 - Toujours : année-mois-jour.
 - En cas de doute sur la date, demande une précision.
+
+Règles supplémentaires obligatoires :
+- Corrige automatiquement toutes les fautes d’orthographe.
+- Utilise toujours les accents correctement.
+- N’écris jamais "confirme" mais "confirmé".
+- N’écris jamais "supprime" mais "supprimé".
+- N’écris jamais "cree" mais "créé".
+- Tes réponses doivent être grammaticalement parfaites.
 
 Actions possibles :
 
@@ -175,15 +188,14 @@ app.post("/process-speech", async (req, res) => {
           },
         });
 
-        reply = "Votre rendez-vous est confirme.";
+        reply = "Votre rendez-vous est confirmé.";
       } catch (calendarError) {
         console.error("ERREUR GOOGLE CREATE :", calendarError.response?.data || calendarError.message);
-        reply = "Un probleme est survenu lors de la reservation.";
+        reply = "Un problème est survenu lors de la réservation.";
       }
     }
 
     /* ================= DELETE ================= */
-
     const deleteMatch = reply.match(/\[DELETE date="([^"]+)" time="([^"]+)"\]/);
 
     if (deleteMatch) {
@@ -202,9 +214,9 @@ app.post("/process-speech", async (req, res) => {
             calendarId: "primary",
             eventId: events.data.items[0].id,
           });
-          reply = "Le rendez vous a ete supprime.";
+          reply = "Le rendez vous a été supprimé.";
         } else {
-          reply = "Je ne trouve aucun rendez vous a cette heure.";
+          reply = "Je ne trouve aucun rendez vous à cette heure.";
         }
       } catch (error) {
         console.error("ERREUR GOOGLE DELETE:", error.response?.data || error.message);
@@ -213,7 +225,6 @@ app.post("/process-speech", async (req, res) => {
     }
 
     /* ================= CHECK ================= */
-
     const checkMatch = reply.match(/\[CHECK date="([^"]+)" time="([^"]+)"\]/);
 
     if (checkMatch) {
@@ -229,11 +240,11 @@ app.post("/process-speech", async (req, res) => {
 
         reply =
           events.data.items.length > 0
-            ? "Ce creneau est deja pris."
-            : "Ce creneau est disponible.";
+            ? "Ce créneau est déjà pris."
+            : "Ce créneau est disponible.";
       } catch (error) {
         console.error("ERREUR GOOGLE CHECK:", error.response?.data || error.message);
-        reply = "Je n arrive pas a verifier ce creneau.";
+        reply = "Je n arrive pas à vérifier ce créneau.";
       }
     }
 
