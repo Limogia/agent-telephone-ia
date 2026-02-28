@@ -84,11 +84,16 @@ app.post("/voice", (req, res) => {
 Tu es une assistante téléphonique française naturelle et professionnelle.
 
 Date actuelle : ${today}
+Cette date est la référence absolue pour déterminer l'année en cours.
 
-Règles :
-- Format exact : YYYY-MM-DD.
-- Si année absente, utilise l’année en cours.
-- Si date passée cette année, utilise l’année suivante.
+Règles obligatoires :
+- Tu dois toujours écrire les dates au format EXACT : YYYY-MM-DD.
+- Si le client ne précise pas l’année, utilise l’année en cours basée sur la date actuelle.
+- Si la date est déjà passée cette année, utilise l’année suivante.
+- Corrige automatiquement toutes les fautes d’orthographe.
+- Utilise toujours les accents correctement.
+
+Actions possibles :
 
 [CREATE date="YYYY-MM-DD" time="HH:MM"]
 [DELETE date="YYYY-MM-DD" time="HH:MM"]
@@ -98,7 +103,49 @@ Ne lis jamais les balises.
 `,
     },
   ];
+// Si la date contient déjà une année (YYYY-MM-DD) on ne touche à rien
+if (date.split("-").length === 3) {
+  // rien
+} 
+  
+// Si la date est sans année (MM-DD ou DD-MM)
+else if (date.split("-").length === 2) {
 
+  const parts = date.split("-");
+  let month, day;
+
+  if (parseInt(parts[0]) > 12) {
+    day = parts[0];
+    month = parts[1];
+  } else {
+    month = parts[0];
+    day = parts[1];
+  }
+
+  const now = new Date();
+  const currentYear = now.getFullYear();
+
+  // On compare uniquement les dates sans heure
+  const todayDateOnly = new Date(
+    now.getFullYear(),
+    now.getMonth(),
+    now.getDate()
+  );
+
+  let candidateDate = new Date(
+    currentYear,
+    parseInt(month) - 1,
+    parseInt(day)
+  );
+
+  let year = currentYear;
+
+  if (candidateDate < todayDateOnly) {
+    year = currentYear + 1;
+  }
+
+  date = `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
+}
   res.type("text/xml");
   res.send(buildTwiML("Bonjour, comment puis-je vous aider ?"));
 });
@@ -119,7 +166,7 @@ app.post("/process-speech", async (req, res) => {
 
   try {
     const completion = await openai.chat.completions.create({
-      model: "gpt-4o-mini", // modèle plus rapide
+      model: "gpt-4o-mini",
       messages: conversations[callSid],
     });
 
@@ -134,49 +181,45 @@ app.post("/process-speech", async (req, res) => {
     if (createMatch) {
       let date = createMatch[1];
       const time = createMatch[2];
-      const now = new Date();
+      const today = new Date();
 
-      // Correction année UNIQUEMENT si absente
       if (date.split("-").length === 2) {
-        const [month, day] = date.split("-");
-        let year = now.getFullYear();
+        const parts = date.split("-");
+        let month, day;
 
-        const todayOnly = new Date(
-          now.getFullYear(),
-          now.getMonth(),
-          now.getDate()
-        );
+        if (parseInt(parts[0]) > 12) {
+          day = parts[0];
+          month = parts[1];
+        } else {
+          month = parts[0];
+          day = parts[1];
+        }
 
-        const candidate = new Date(
-          year,
-          parseInt(month) - 1,
-          parseInt(day)
-        );
+        let year = today.getFullYear();
+        let testDate = new Date(`${year}-${month}-${day}T${time}:00`);
 
-        if (candidate < todayOnly) year += 1;
+        if (testDate < today) year += 1;
 
         date = `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
       }
 
-      const [y, m, d] = date.split("-");
-      const [hh, mm] = time.split(":");
-
-      const startDate = new Date(y, m - 1, d, hh, mm);
-      const endDate = new Date(startDate.getTime() + 60 * 60 * 1000);
+      const startDateTime = `${date}T${time}:00`;
+      const endDateTime = new Date(
+        new Date(startDateTime).getTime() + 60 * 60 * 1000
+      );
 
       try {
         // Vérification disponibilité
         const existing = await calendar.events.list({
           calendarId: "primary",
-          timeMin: startDate.toISOString(),
-          timeMax: endDate.toISOString(),
+          timeMin: startDateTime,
+          timeMax: endDateTime.toISOString(),
           singleEvents: true,
         });
 
         if (existing.data.items.length > 0) {
           reply = "Ce créneau est déjà réservé.";
         } else {
-
           // Suppression ancien RDV si modification
           if (lastCreatedEvent[callSid]) {
             try {
@@ -192,11 +235,11 @@ app.post("/process-speech", async (req, res) => {
             resource: {
               summary: "Rendez-vous client",
               start: {
-                dateTime: startDate.toISOString(),
+                dateTime: startDateTime,
                 timeZone: "Europe/Paris",
               },
               end: {
-                dateTime: endDate.toISOString(),
+                dateTime: endDateTime.toISOString(),
                 timeZone: "Europe/Paris",
               },
             },
@@ -205,7 +248,11 @@ app.post("/process-speech", async (req, res) => {
           lastCreatedEvent[callSid] = createdEvent.data.id;
           reply = "Votre rendez-vous est confirmé.";
         }
-      } catch (err) {
+      } catch (calendarError) {
+        console.error(
+          "ERREUR GOOGLE CREATE :",
+          calendarError.response?.data || calendarError.message
+        );
         reply = "Un problème est survenu lors de la réservation.";
       }
     }
@@ -218,14 +265,11 @@ app.post("/process-speech", async (req, res) => {
       const date = deleteMatch[1];
       const time = deleteMatch[2];
 
-      const start = new Date(`${date}T${time}:00`);
-      const end = new Date(start.getTime() + 60 * 60 * 1000);
-
       try {
         const events = await calendar.events.list({
           calendarId: "primary",
-          timeMin: start.toISOString(),
-          timeMax: end.toISOString(),
+          timeMin: `${date}T${time}:00+01:00`,
+          timeMax: `${date}T${time}:59+01:00`,
         });
 
         if (events.data.items.length > 0) {
@@ -237,8 +281,32 @@ app.post("/process-speech", async (req, res) => {
         } else {
           reply = "Je ne trouve aucun rendez-vous à cette heure.";
         }
-      } catch {
+      } catch (error) {
         reply = "Impossible de supprimer le rendez-vous.";
+      }
+    }
+
+    /* ================= CHECK ================= */
+
+    const checkMatch = reply.match(/\[CHECK date="([^"]+)" time="([^"]+)"\]/);
+
+    if (checkMatch) {
+      const date = checkMatch[1];
+      const time = checkMatch[2];
+
+      try {
+        const events = await calendar.events.list({
+          calendarId: "primary",
+          timeMin: `${date}T${time}:00+01:00`,
+          timeMax: `${date}T${time}:59+01:00`,
+        });
+
+        reply =
+          events.data.items.length > 0
+            ? "Ce créneau est déjà pris."
+            : "Ce créneau est disponible.";
+      } catch (error) {
+        reply = "Je n'arrive pas à vérifier ce créneau.";
       }
     }
 
@@ -247,8 +315,8 @@ app.post("/process-speech", async (req, res) => {
 
     res.type("text/xml");
     res.send(buildTwiML(reply));
-
   } catch (error) {
+    console.error("ERREUR OPENAI:", error.message);
     res.type("text/xml");
     res.send(buildTwiML("Une erreur technique est survenue."));
   }
