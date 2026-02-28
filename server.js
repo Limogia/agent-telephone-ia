@@ -55,7 +55,7 @@ function buildTwiML(message) {
 <Response>
   <Gather input="speech"
           timeout="8"
-          speechTimeout="auto"
+          speechTimeout="3"
           language="fr-FR"
           action="/process-speech"
           method="POST">
@@ -84,14 +84,12 @@ app.post("/voice", (req, res) => {
 Tu es une assistante téléphonique française naturelle et professionnelle.
 
 Date actuelle : ${today}
-Cette date est la référence absolue pour déterminer l'année en cours.
 
 Règles obligatoires :
-- Tu dois toujours écrire les dates au format EXACT : YYYY-MM-DD.
-- Si le client ne précise pas l’année, utilise l’année en cours basée sur la date actuelle.
-- Si la date est déjà passée cette année, utilise l’année suivante.
-- Corrige automatiquement toutes les fautes d’orthographe.
-- Utilise toujours les accents correctement.
+- Format date EXACT : YYYY-MM-DD.
+- Si année absente, utilise l’année en cours.
+- Si la date est passée cette année, utilise l’année suivante.
+- Corrige automatiquement les fautes.
 
 Actions possibles :
 
@@ -103,49 +101,7 @@ Ne lis jamais les balises.
 `,
     },
   ];
-// Si la date contient déjà une année (YYYY-MM-DD) on ne touche à rien
-if (date.split("-").length === 3) {
-  // rien
-} 
-  
-// Si la date est sans année (MM-DD ou DD-MM)
-else if (date.split("-").length === 2) {
 
-  const parts = date.split("-");
-  let month, day;
-
-  if (parseInt(parts[0]) > 12) {
-    day = parts[0];
-    month = parts[1];
-  } else {
-    month = parts[0];
-    day = parts[1];
-  }
-
-  const now = new Date();
-  const currentYear = now.getFullYear();
-
-  // On compare uniquement les dates sans heure
-  const todayDateOnly = new Date(
-    now.getFullYear(),
-    now.getMonth(),
-    now.getDate()
-  );
-
-  let candidateDate = new Date(
-    currentYear,
-    parseInt(month) - 1,
-    parseInt(day)
-  );
-
-  let year = currentYear;
-
-  if (candidateDate < todayDateOnly) {
-    year = currentYear + 1;
-  }
-
-  date = `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
-}
   res.type("text/xml");
   res.send(buildTwiML("Bonjour, comment puis-je vous aider ?"));
 });
@@ -181,38 +137,49 @@ app.post("/process-speech", async (req, res) => {
     if (createMatch) {
       let date = createMatch[1];
       const time = createMatch[2];
-      const today = new Date();
+      const now = new Date();
 
+      // Correction année uniquement si absente
       if (date.split("-").length === 2) {
         const parts = date.split("-");
-        let month, day;
+        let month = parts[0];
+        let day = parts[1];
 
-        if (parseInt(parts[0]) > 12) {
-          day = parts[0];
-          month = parts[1];
-        } else {
-          month = parts[0];
-          day = parts[1];
+        let year = now.getFullYear();
+
+        const candidate = new Date(year, parseInt(month) - 1, parseInt(day));
+
+        const todayOnly = new Date(
+          now.getFullYear(),
+          now.getMonth(),
+          now.getDate()
+        );
+
+        if (candidate < todayOnly) {
+          year += 1;
         }
-
-        let year = today.getFullYear();
-        let testDate = new Date(`${year}-${month}-${day}T${time}:00`);
-
-        if (testDate < today) year += 1;
 
         date = `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
       }
 
-      const startDateTime = `${date}T${time}:00`;
-      const endDateTime = new Date(
-        new Date(startDateTime).getTime() + 60 * 60 * 1000
+      // Construction date locale propre
+      const [y, m, d] = date.split("-");
+      const [hh, mm] = time.split(":");
+
+      const startDateTime = new Date(
+        parseInt(y),
+        parseInt(m) - 1,
+        parseInt(d),
+        parseInt(hh),
+        parseInt(mm)
       );
 
+      const endDateTime = new Date(startDateTime.getTime() + 60 * 60 * 1000);
+
       try {
-        // Vérification disponibilité
         const existing = await calendar.events.list({
           calendarId: "primary",
-          timeMin: startDateTime,
+          timeMin: startDateTime.toISOString(),
           timeMax: endDateTime.toISOString(),
           singleEvents: true,
         });
@@ -220,7 +187,7 @@ app.post("/process-speech", async (req, res) => {
         if (existing.data.items.length > 0) {
           reply = "Ce créneau est déjà réservé.";
         } else {
-          // Suppression ancien RDV si modification
+
           if (lastCreatedEvent[callSid]) {
             try {
               await calendar.events.delete({
@@ -235,7 +202,7 @@ app.post("/process-speech", async (req, res) => {
             resource: {
               summary: "Rendez-vous client",
               start: {
-                dateTime: startDateTime,
+                dateTime: startDateTime.toISOString(),
                 timeZone: "Europe/Paris",
               },
               end: {
@@ -248,11 +215,8 @@ app.post("/process-speech", async (req, res) => {
           lastCreatedEvent[callSid] = createdEvent.data.id;
           reply = "Votre rendez-vous est confirmé.";
         }
+
       } catch (calendarError) {
-        console.error(
-          "ERREUR GOOGLE CREATE :",
-          calendarError.response?.data || calendarError.message
-        );
         reply = "Un problème est survenu lors de la réservation.";
       }
     }
@@ -268,8 +232,8 @@ app.post("/process-speech", async (req, res) => {
       try {
         const events = await calendar.events.list({
           calendarId: "primary",
-          timeMin: `${date}T${time}:00+01:00`,
-          timeMax: `${date}T${time}:59+01:00`,
+          timeMin: `${date}T${time}:00`,
+          timeMax: `${date}T${time}:59`,
         });
 
         if (events.data.items.length > 0) {
@@ -297,8 +261,8 @@ app.post("/process-speech", async (req, res) => {
       try {
         const events = await calendar.events.list({
           calendarId: "primary",
-          timeMin: `${date}T${time}:00+01:00`,
-          timeMax: `${date}T${time}:59+01:00`,
+          timeMin: `${date}T${time}:00`,
+          timeMax: `${date}T${time}:59`,
         });
 
         reply =
@@ -315,8 +279,8 @@ app.post("/process-speech", async (req, res) => {
 
     res.type("text/xml");
     res.send(buildTwiML(reply));
+
   } catch (error) {
-    console.error("ERREUR OPENAI:", error.message);
     res.type("text/xml");
     res.send(buildTwiML("Une erreur technique est survenue."));
   }
