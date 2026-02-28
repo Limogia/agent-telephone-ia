@@ -229,6 +229,33 @@ app.post("/process-speech", async (req, res) => {
       }
     }
 
+const axios = require("axios");
+
+app.get("/test-voice", async (req, res) => {
+  try {
+    const response = await axios({
+      method: "POST",
+      url: `https://api.elevenlabs.io/v1/text-to-speech/${process.env.EMILIEVOICE_ID}`,
+      headers: {
+        "xi-api-key": process.env.ELEVENLABS_API_KEY,
+        "Content-Type": "application/json",
+      },
+      data: {
+        text: "Bonjour, ceci est un test de la voix Emilie depuis Railway.",
+        model_id: "eleven_multilingual_v2"
+      },
+      responseType: "arraybuffer"
+    });
+
+    res.set("Content-Type", "audio/mpeg");
+    res.send(response.data);
+
+  } catch (error) {
+    console.error(error.response?.data || error.message);
+    res.status(500).send("Erreur ElevenLabs");
+  }
+});
+    
     /* ================= CHECK ================= */
 
     const checkMatch = reply.match(/\[CHECK date="([^"]+)" time="([^"]+)"\]/);
