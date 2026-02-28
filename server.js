@@ -32,12 +32,11 @@ const calendar = google.calendar({
 /* ================= MEMOIRE ================= */
 
 const conversations = {};
-const lastEventByCall = {};
 
 /* ================= UTIL ================= */
 
 function escapeXml(text) {
-  if (!text || typeof text !== "string") return "Je vous écoute.";
+  if (!text || typeof text !== "string") return "Je vous ecoute.";
   return text
     .replace(/&/g, "et")
     .replace(/</g, "")
@@ -47,39 +46,17 @@ function escapeXml(text) {
     .trim();
 }
 
-function cleanFrench(text) {
-  if (!text) return text;
-  return text
-    .replace(/\bconfirme\b/gi, "confirmé")
-    .replace(/\bsupprime\b/gi, "supprimé")
-    .replace(/\bmodifie\b/gi, "modifié")
-    .replace(/\bcree\b/gi, "créé")
-    .replace(/\bete\b/gi, "été")
-    .replace(/\ba ete\b/gi, "a été");
-}
-
 function buildTwiML(message) {
   message = escapeXml(message);
-  if (!message || message.length < 2) message = "Très bien.";
+  if (!message || message.length < 2) message = "Tres bien.";
 
   return `
 <Response>
-  <Gather 
-      input="speech"
-      timeout="12"
-      speechTimeout="6"
-      language="fr-FR"
-      action="/process-speech"
-      method="POST">
+  <Gather input="speech" timeout="5" speechTimeout="auto" language="fr-FR" action="/process-speech" method="POST">
     <Say language="fr-FR">
       ${message}
     </Say>
   </Gather>
-
-  <Say language="fr-FR">
-    Je suis toujours à votre écoute.
-  </Say>
-  <Redirect method="POST">/voice</Redirect>
 </Response>
 `;
 }
@@ -99,21 +76,20 @@ app.post("/voice", (req, res) => {
     {
       role: "system",
       content: `
-Tu es une assistante téléphonique française naturelle.
-Quand une action est nécessaire, termine par :
+Tu es une assistante telephonique francaise naturelle.
+Quand une action est necessaire, termine par :
 
 [CREATE date="YYYY-MM-DD" time="HH:MM"]
 [DELETE date="YYYY-MM-DD" time="HH:MM"]
 [CHECK date="YYYY-MM-DD" time="HH:MM"]
 
 Ne lis jamais les balises.
-Si on modifie un rendez-vous, il faut déplacer l'existant et ne jamais en recréer un.
 `,
     },
   ];
 
   res.type("text/xml");
-  res.send(buildTwiML("Bonjour, comment puis-je vous aider ?"));
+  res.send(buildTwiML("Bonjour, comment puis je vous aider ?"));
 });
 
 /* ================= TRAITEMENT ================= */
@@ -124,7 +100,7 @@ app.post("/process-speech", async (req, res) => {
 
   if (!speech) {
     res.type("text/xml");
-    return res.send(buildTwiML("Je ne vous ai pas entendu, pouvez-vous répéter ?"));
+    return res.send(buildTwiML("Je ne vous ai pas entendu, pouvez vous repeter ?"));
   }
 
   if (!conversations[callSid]) conversations[callSid] = [];
@@ -139,9 +115,9 @@ app.post("/process-speech", async (req, res) => {
 
     let reply =
       completion?.choices?.[0]?.message?.content ||
-      "Je n'ai pas compris.";
+      "Je n ai pas compris.";
 
-    /* ================= CREATE / MOVE ================= */
+    /* ================= CREATE (CORRIGÉ) ================= */
 
     const createMatch = reply.match(/\[CREATE date="([^"]+)" time="([^"]+)"\]/);
 
@@ -149,43 +125,30 @@ app.post("/process-speech", async (req, res) => {
       const date = createMatch[1];
       const time = createMatch[2];
 
-      const startLocal = `${date}T${time}:00`;
-      const endDate = new Date(startLocal);
-      endDate.setHours(endDate.getHours() + 1);
-
-      const endLocal =
-        `${date}T${String(endDate.getHours()).padStart(2,"0")}:${String(endDate.getMinutes()).padStart(2,"0")}:00`;
+      const startDateTime = `${date}T${time}:00`;
+      const endDate = new Date(`${date}T${time}:00`);
+      const endDateTime = new Date(endDate.getTime() + 60 * 60 * 1000);
 
       try {
-        if (lastEventByCall[callSid]) {
-          await calendar.events.update({
-            calendarId: "primary",
-            eventId: lastEventByCall[callSid],
-            resource: {
-              summary: "Rendez-vous client",
-              start: { dateTime: startLocal, timeZone: "Europe/Paris" },
-              end: { dateTime: endLocal, timeZone: "Europe/Paris" },
+        await calendar.events.insert({
+          calendarId: "primary",
+          resource: {
+            summary: "Rendez vous client",
+            start: {
+              dateTime: startDateTime,
+              timeZone: "Europe/Paris",
             },
-          });
-
-          reply = "Votre rendez-vous a été déplacé.";
-        } else {
-          const event = await calendar.events.insert({
-            calendarId: "primary",
-            resource: {
-              summary: "Rendez-vous client",
-              start: { dateTime: startLocal, timeZone: "Europe/Paris" },
-              end: { dateTime: endLocal, timeZone: "Europe/Paris" },
+            end: {
+              dateTime: `${date}T${String(endDateTime.getHours()).padStart(2,"0")}:${String(endDateTime.getMinutes()).padStart(2,"0")}:00`,
+              timeZone: "Europe/Paris",
             },
-          });
+          },
+        });
 
-          lastEventByCall[callSid] = event.data.id;
-          reply = "Votre rendez-vous est confirmé.";
-        }
-
+        reply = "Votre rendez vous est confirme.";
       } catch (calendarError) {
         console.error("ERREUR GOOGLE CREATE :", calendarError.response?.data || calendarError.message);
-        reply = "Il y a un problème de réservation.";
+        reply = "Il y a un probleme de reservation.";
       }
     }
 
@@ -193,17 +156,29 @@ app.post("/process-speech", async (req, res) => {
 
     const deleteMatch = reply.match(/\[DELETE date="([^"]+)" time="([^"]+)"\]/);
 
-    if (deleteMatch && lastEventByCall[callSid]) {
+    if (deleteMatch) {
+      const date = deleteMatch[1];
+      const time = deleteMatch[2];
+
       try {
-        await calendar.events.delete({
+        const events = await calendar.events.list({
           calendarId: "primary",
-          eventId: lastEventByCall[callSid],
+          timeMin: `${date}T${time}:00+01:00`,
+          timeMax: `${date}T${time}:59+01:00`,
         });
 
-        delete lastEventByCall[callSid];
-        reply = "Le rendez-vous a été supprimé.";
+        if (events.data.items.length > 0) {
+          await calendar.events.delete({
+            calendarId: "primary",
+            eventId: events.data.items[0].id,
+          });
+          reply = "Le rendez vous a ete supprime.";
+        } else {
+          reply = "Je ne trouve aucun rendez vous a cette heure.";
+        }
       } catch (error) {
-        reply = "Impossible de supprimer le rendez-vous.";
+        console.error("ERREUR GOOGLE DELETE:", error.response?.data || error.message);
+        reply = "Impossible de supprimer le rendez vous.";
       }
     }
 
@@ -215,25 +190,24 @@ app.post("/process-speech", async (req, res) => {
       const date = checkMatch[1];
       const time = checkMatch[2];
 
-      const startLocal = `${date}T${time}:00`;
-      const endDate = new Date(startLocal);
-      endDate.setHours(endDate.getHours() + 1);
+      try {
+        const events = await calendar.events.list({
+          calendarId: "primary",
+          timeMin: `${date}T${time}:00+01:00`,
+          timeMax: `${date}T${time}:59+01:00`,
+        });
 
-      const events = await calendar.events.list({
-        calendarId: "primary",
-        timeMin: startLocal,
-        timeMax: endDate.toISOString(),
-        singleEvents: true,
-      });
-
-      reply =
-        events.data.items.length > 0
-          ? "Ce créneau est déjà pris."
-          : "Ce créneau est disponible.";
+        reply =
+          events.data.items.length > 0
+            ? "Ce creneau est deja pris."
+            : "Ce creneau est disponible.";
+      } catch (error) {
+        console.error("ERREUR GOOGLE CHECK:", error.response?.data || error.message);
+        reply = "Je n arrive pas a verifier ce creneau.";
+      }
     }
 
     reply = reply.replace(/\[.*?\]/g, "").trim();
-    reply = cleanFrench(reply);
 
     conversations[callSid].push({ role: "assistant", content: reply });
 
@@ -250,6 +224,10 @@ app.post("/process-speech", async (req, res) => {
 
 /* ================= SERVER ================= */
 
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log("Serveur demarre sur le port " + PORT);
+});
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log("Serveur démarré sur le port " + PORT);
