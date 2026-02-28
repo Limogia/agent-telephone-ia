@@ -8,11 +8,11 @@ app.use(express.json());
 
 /* ================= CONFIG ================= */
 
-const CONSULT_DURATION = 30; // minutes
 const TIMEZONE = "Europe/Paris";
-const CURRENT_DATE = "28/02/2026";
+const CONSULT_DURATION = 30; // minutes
+const CURRENT_DATE = "2026-02-28";
 
-/* ================= OUTILS DATE FR ================= */
+/* ================= DATE FRANCE ================= */
 
 function nowParis() {
   return new Date(
@@ -20,8 +20,12 @@ function nowParis() {
   );
 }
 
-function formatDateFR(dateObj) {
-  return dateObj.toLocaleString("fr-FR", {
+function toISO(date) {
+  return new Date(date).toISOString();
+}
+
+function formatFR(date) {
+  return date.toLocaleString("fr-FR", {
     timeZone: TIMEZONE,
     dateStyle: "full",
     timeStyle: "short",
@@ -54,7 +58,7 @@ const calendar = google.calendar({
 /* ================= MEMOIRE ================= */
 
 const conversations = {};
-const sessions = {}; // stocke nom + motif pendant appel
+const sessionData = {};
 
 /* ================= TWIML ================= */
 
@@ -74,18 +78,19 @@ function buildTwiML(message) {
 `;
 }
 
-/* ================= ROUTE TEST ================= */
+/* ================= ROUTE ================= */
 
 app.get("/", (req, res) => {
   res.send("Cabinet médical Dr Boutaam actif");
 });
 
-/* ================= APPEL INITIAL ================= */
+/* ================= APPEL ================= */
 
 app.post("/voice", (req, res) => {
+
   const callSid = req.body.CallSid;
 
-  sessions[callSid] = {
+  sessionData[callSid] = {
     name: null,
     reason: null,
   };
@@ -99,32 +104,27 @@ Fuseau horaire obligatoire : Europe/Paris.
 
 Tu es la secrétaire médicale humaine du Docteur Boutaam.
 
-Règles métier :
-
+Règles strictes :
 - Consultation = 30 minutes.
-- Tu dois demander le nom du patient.
-- Tu dois demander le motif.
-- Si date absente, la déduire intelligemment.
-- Si doute → demander précision.
-- Toujours format 24h (ex : 10:00, jamais 12 PM).
-- Toujours format date YYYY-MM-DD.
-- Si année absente → utiliser 2026.
-- Si date passée en 2026 → proposer 2027.
+- Toujours format 24h.
+- Si le patient dit 9h → c’est 09:00.
+- Si année absente → 2026.
+- Si date déjà passée en 2026 → proposer 2027.
+- Toujours vérifier EXACTEMENT le créneau demandé.
+- Ne jamais inventer une disponibilité.
+- Toujours consulter le calendrier réel.
+- Si modification → supprimer ancien RDV puis recréer.
+- Un patient ne peut supprimer que son propre RDV.
+- Toujours demander nom + motif si manquant.
+- Être naturelle, fluide, intelligente.
 
-Gestion agenda :
-- Si créneau occupé → proposer le plus proche disponible.
-- Pour modification → supprimer ancien puis recréer.
-- Pour suppression → vérifier que le nom correspond.
-- Un patient ne peut pas supprimer un RDV d’un autre.
+Balises :
 
-Quand tout est prêt :
-
-[CREATE date="YYYY-MM-DD" time="HH:MM"]
-[DELETE name="NOM PATIENT"]
-[MODIFY name="NOM PATIENT" date="YYYY-MM-DD" time="HH:MM"]
+[CREATE name="NOM" reason="MOTIF" date="YYYY-MM-DD" time="HH:MM"]
+[DELETE name="NOM"]
+[MODIFY name="NOM" date="YYYY-MM-DD" time="HH:MM"]
 
 Ne lis jamais les balises.
-Tu es naturelle, intelligente, avec de la répartie.
 `,
     },
   ];
@@ -136,6 +136,7 @@ Tu es naturelle, intelligente, avec de la répartie.
 /* ================= TRAITEMENT ================= */
 
 app.post("/process-speech", async (req, res) => {
+
   const speech = (req.body.SpeechResult || "").trim();
   const callSid = req.body.CallSid;
 
@@ -146,6 +147,7 @@ app.post("/process-speech", async (req, res) => {
   conversations[callSid].push({ role: "user", content: speech });
 
   try {
+
     const completion = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       messages: conversations[callSid],
@@ -155,65 +157,70 @@ app.post("/process-speech", async (req, res) => {
 
     /* ================= CREATE ================= */
 
-    const createMatch = reply.match(/\[CREATE date="([^"]+)" time="([^"]+)"\]/);
+    const createMatch = reply.match(/\[CREATE name="([^"]+)" reason="([^"]+)" date="([^"]+)" time="([^"]+)"\]/);
 
     if (createMatch) {
-      const date = createMatch[1];
-      const time = createMatch[2];
 
-      const [y, m, d] = date.split("-");
-      const [hh, mm] = time.split(":");
+      const name = createMatch[1];
+      const reason = createMatch[2];
+      const date = createMatch[3];
+      const time = createMatch[4];
 
-      const start = new Date(y, m - 1, d, hh, mm);
+      const [year, month, day] = date.split("-");
+      const [hour, minute] = time.split(":");
+
+      const start = new Date(year, month - 1, day, hour, minute);
       const end = new Date(start.getTime() + CONSULT_DURATION * 60000);
 
+      // Vérification exacte du créneau demandé
       const existing = await calendar.events.list({
         calendarId: "primary",
-        timeMin: start.toISOString(),
-        timeMax: end.toISOString(),
+        timeMin: toISO(start),
+        timeMax: toISO(end),
         singleEvents: true,
       });
 
       if (existing.data.items.length > 0) {
 
-        // Propose prochain créneau libre
-        let newStart = new Date(start);
+        // Recherche prochain créneau libre
+        let candidate = new Date(start);
         let found = false;
 
-        for (let i = 1; i <= 8; i++) {
-          newStart = new Date(start.getTime() + i * CONSULT_DURATION * 60000);
-          const newEnd = new Date(newStart.getTime() + CONSULT_DURATION * 60000);
+        for (let i = 1; i <= 16; i++) {
+          candidate = new Date(start.getTime() + i * CONSULT_DURATION * 60000);
+          const candidateEnd = new Date(candidate.getTime() + CONSULT_DURATION * 60000);
 
           const check = await calendar.events.list({
             calendarId: "primary",
-            timeMin: newStart.toISOString(),
-            timeMax: newEnd.toISOString(),
+            timeMin: toISO(candidate),
+            timeMax: toISO(candidateEnd),
             singleEvents: true,
           });
 
           if (check.data.items.length === 0) {
-            reply = `Le créneau demandé est indisponible. Je peux vous proposer le ${formatDateFR(newStart)}. Cela vous convient-il ?`;
+            reply = `Le créneau demandé n'est pas disponible. Je peux vous proposer le ${formatFR(candidate)}. Cela vous convient-il ?`;
             found = true;
             break;
           }
         }
 
         if (!found) {
-          reply = "Je n'ai malheureusement pas de disponibilité proche. Souhaitez-vous un autre jour ?";
+          reply = "Je n'ai pas de disponibilité proche. Souhaitez-vous un autre jour ?";
         }
 
       } else {
+
         await calendar.events.insert({
           calendarId: "primary",
           resource: {
-            summary: `Consultation - ${sessions[callSid]?.name || "Patient"}`,
-            description: `Motif : ${sessions[callSid]?.reason || "Non précisé"}`,
-            start: { dateTime: start.toISOString(), timeZone: TIMEZONE },
-            end: { dateTime: end.toISOString(), timeZone: TIMEZONE },
+            summary: `Consultation - ${name}`,
+            description: `Patient : ${name}\nMotif : ${reason}`,
+            start: { dateTime: toISO(start), timeZone: TIMEZONE },
+            end: { dateTime: toISO(end), timeZone: TIMEZONE },
           },
         });
 
-        reply = `Votre rendez-vous est confirmé pour le ${formatDateFR(start)}.`;
+        reply = `Votre rendez-vous est confirmé le ${formatFR(start)}.`;
       }
     }
 
@@ -222,6 +229,7 @@ app.post("/process-speech", async (req, res) => {
     const deleteMatch = reply.match(/\[DELETE name="([^"]+)"\]/);
 
     if (deleteMatch) {
+
       const name = deleteMatch[1];
 
       const events = await calendar.events.list({
@@ -231,14 +239,14 @@ app.post("/process-speech", async (req, res) => {
       });
 
       if (events.data.items.length === 0) {
-        reply = "Je ne trouve aucun rendez-vous à ce nom.";
+        reply = "Je ne trouve aucun rendez-vous à votre nom.";
       } else {
         await calendar.events.delete({
           calendarId: "primary",
           eventId: events.data.items[0].id,
         });
 
-        reply = "Votre rendez-vous a bien été supprimé.";
+        reply = "Votre rendez-vous a été supprimé.";
       }
     }
 
@@ -247,6 +255,7 @@ app.post("/process-speech", async (req, res) => {
     const modifyMatch = reply.match(/\[MODIFY name="([^"]+)" date="([^"]+)" time="([^"]+)"\]/);
 
     if (modifyMatch) {
+
       const name = modifyMatch[1];
       const date = modifyMatch[2];
       const time = modifyMatch[3];
@@ -260,6 +269,7 @@ app.post("/process-speech", async (req, res) => {
       if (events.data.items.length === 0) {
         reply = "Je ne trouve aucun rendez-vous à modifier.";
       } else {
+
         await calendar.events.delete({
           calendarId: "primary",
           eventId: events.data.items[0].id,
@@ -267,6 +277,7 @@ app.post("/process-speech", async (req, res) => {
 
         const [y, m, d] = date.split("-");
         const [hh, mm] = time.split(":");
+
         const start = new Date(y, m - 1, d, hh, mm);
         const end = new Date(start.getTime() + CONSULT_DURATION * 60000);
 
@@ -274,12 +285,12 @@ app.post("/process-speech", async (req, res) => {
           calendarId: "primary",
           resource: {
             summary: `Consultation - ${name}`,
-            start: { dateTime: start.toISOString(), timeZone: TIMEZONE },
-            end: { dateTime: end.toISOString(), timeZone: TIMEZONE },
+            start: { dateTime: toISO(start), timeZone: TIMEZONE },
+            end: { dateTime: toISO(end), timeZone: TIMEZONE },
           },
         });
 
-        reply = `Votre rendez-vous a été modifié au ${formatDateFR(start)}.`;
+        reply = `Votre rendez-vous a été déplacé au ${formatFR(start)}.`;
       }
     }
 
