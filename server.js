@@ -27,7 +27,7 @@ function nowParis() {
   );
 }
 
-function createDateLocal(year, month, day, hour, minute) {
+function createLocalDate(year, month, day, hour, minute) {
   return new Date(year, month - 1, day, hour, minute, 0);
 }
 
@@ -135,17 +135,15 @@ Fuseau horaire : Europe/Paris.
 
 Vous êtes la secrétaire professionnelle du Docteur Boutaam.
 
-RÈGLES STRICTES :
+Règles :
 
 - Consultation = 30 minutes.
-- Heure EXACTE demandée.
-- Format 24h uniquement.
-- Ne jamais ajouter +1h.
-- Vérifier créneau exact demandé.
-- Si indisponible → proposer le plus proche.
-- Si date absente → la déduire.
+- Toujours utiliser l'heure EXACTE demandée.
+- Ne jamais ajouter ou retirer une heure.
+- Ne jamais inventer un jour de la semaine.
+- Vérifier la disponibilité exacte sur le calendrier.
 - Ne jamais tutoyer.
-- Toujours demander nom + motif si manquant.
+- Toujours demander nom, motif et téléphone si manquants.
 
 Balises :
 
@@ -184,8 +182,6 @@ app.post("/process-speech", async (req, res) => {
 
     let reply = completion.choices[0].message.content;
 
-    /* ================= CREATE ================= */
-
     const createMatch = reply.match(/\[CREATE name="([^"]+)" reason="([^"]+)" phone="([^"]+)" date="([^"]+)" time="([^"]+)"\]/);
 
     if (createMatch) {
@@ -196,19 +192,18 @@ app.post("/process-speech", async (req, res) => {
       const [year, month, day] = createMatch[4].split("-");
       const [hour, minute] = createMatch[5].split(":");
 
-      let start = createDateLocal(year, month, day, hour, minute);
+      const start = createLocalDate(year, month, day, hour, minute);
+      const end = new Date(start.getTime() + CONSULT_DURATION * 60000);
 
       if (!isOpen(start)) {
         const proposal = nextOpenSlot(start);
         reply = `Le cabinet est fermé à cet horaire. Je peux vous proposer le ${formatFR(proposal)}.`;
       } else {
 
-        const end = new Date(start.getTime() + CONSULT_DURATION * 60000);
-
         const existing = await calendar.events.list({
           calendarId: "primary",
           timeMin: `${year}-${month}-${day}T${hour}:${minute}:00`,
-          timeMax: end.toISOString(),
+          timeMax: `${year}-${month}-${day}T${end.getHours().toString().padStart(2,"0")}:${end.getMinutes().toString().padStart(2,"0")}:00`,
           singleEvents: true
         });
 
@@ -226,9 +221,7 @@ app.post("/process-speech", async (req, res) => {
                 timeZone: TIMEZONE
               },
               end: {
-                dateTime: new Date(start.getTime() + CONSULT_DURATION * 60000)
-                  .toISOString()
-                  .replace("Z",""),
+                dateTime: `${year}-${month}-${day}T${end.getHours().toString().padStart(2,"0")}:${end.getMinutes().toString().padStart(2,"0")}:00`,
                 timeZone: TIMEZONE
               }
             }
@@ -255,8 +248,6 @@ app.post("/process-speech", async (req, res) => {
     res.send(buildTwiML("Une erreur technique est survenue."));
   }
 });
-
-/* ================= SERVER ================= */
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
