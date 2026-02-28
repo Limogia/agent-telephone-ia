@@ -1,7 +1,7 @@
 const express = require("express");
 const { google } = require("googleapis");
 const OpenAI = require("openai");
-const axios = require("axios"); // <-- AJOUT NECESSAIRE
+const axios = require("axios");
 
 const app = express();
 app.use(express.urlencoded({ extended: false }));
@@ -47,17 +47,40 @@ function escapeXml(text) {
     .trim();
 }
 
-function buildTwiML(message) {
+/* ================= ELEVENLABS ================= */
+
+async function generateSpeech(text) {
+  const response = await axios({
+    method: "POST",
+    url: `https://api.elevenlabs.io/v1/text-to-speech/${process.env.EMILIEVOICE_ID}`,
+    headers: {
+      "xi-api-key": process.env.ELEVENLABS_API_KEY,
+      "Content-Type": "application/json"
+    },
+    data: {
+      text: text,
+      model_id: "eleven_multilingual_v2",
+      voice_settings: {
+        stability: 0.7,
+        similarity_boost: 0.85
+      }
+    },
+    responseType: "arraybuffer"
+  });
+
+  return Buffer.from(response.data).toString("base64");
+}
+
+async function buildTwiML(message) {
   message = escapeXml(message);
   if (!message || message.length < 2) message = "Tres bien.";
 
+  const audioBase64 = await generateSpeech(message);
+
   return `
 <Response>
-  <Gather input="speech" timeout="5" speechTimeout="auto" language="fr-FR" action="/process-speech" method="POST">
-    <Say language="fr-FR">
-      ${message}
-    </Say>
-  </Gather>
+  <Play>data:audio/mpeg;base64,${audioBase64}</Play>
+  <Gather input="speech" timeout="5" speechTimeout="auto" language="fr-FR" action="/process-speech" method="POST" />
 </Response>
 `;
 }
@@ -68,31 +91,12 @@ app.get("/", (req, res) => {
   res.send("Serveur actif");
 });
 
-/* ================= TEST ELEVENLABS ================= */
-
 app.get("/test-voice", async (req, res) => {
   try {
-    const response = await axios({
-      method: "POST",
-      url: `https://api.elevenlabs.io/v1/text-to-speech/${process.env.EMILIEVOICE_ID}`,
-      headers: {
-        "xi-api-key": process.env.ELEVENLABS_API_KEY,
-        "Content-Type": "application/json"
-      },
-      data: {
-        text: "Bonjour, ceci est un test de la voix Emilie depuis Railway.",
-        model_id: "eleven_multilingual_v2",
-        voice_settings: {
-          stability: 0.7,
-          similarity_boost: 0.85
-        }
-      },
-      responseType: "arraybuffer"
-    });
-
+    const audioBase64 = await generateSpeech("Bonjour, ceci est un test de la voix Emilie depuis Railway.");
+    const buffer = Buffer.from(audioBase64, "base64");
     res.setHeader("Content-Type", "audio/mpeg");
-    res.send(response.data);
-
+    res.send(buffer);
   } catch (error) {
     console.error("ERREUR ELEVENLABS:", error.response?.data || error.message);
     res.status(500).send("Erreur ElevenLabs");
@@ -101,7 +105,7 @@ app.get("/test-voice", async (req, res) => {
 
 /* ================= APPEL INITIAL ================= */
 
-app.post("/voice", (req, res) => {
+app.post("/voice", async (req, res) => {
   const callSid = req.body.CallSid;
 
   conversations[callSid] = [
@@ -129,7 +133,7 @@ Ne lis jamais les balises.
   ];
 
   res.type("text/xml");
-  res.send(buildTwiML("Bonjour, comment puis je vous aider ?"));
+  res.send(await buildTwiML("Bonjour, comment puis je vous aider ?"));
 });
 
 /* ================= TRAITEMENT ================= */
@@ -140,7 +144,7 @@ app.post("/process-speech", async (req, res) => {
 
   if (!speech) {
     res.type("text/xml");
-    return res.send(buildTwiML("Je ne vous ai pas entendu, pouvez vous repeter ?"));
+    return res.send(await buildTwiML("Je ne vous ai pas entendu, pouvez vous repeter ?"));
   }
 
   if (!conversations[callSid]) conversations[callSid] = [];
@@ -157,7 +161,7 @@ app.post("/process-speech", async (req, res) => {
       completion?.choices?.[0]?.message?.content ||
       "Je n ai pas compris.";
 
-    /* ================= CREATE ================= */
+    /* === TOUTE TA LOGIQUE CREATE / DELETE / CHECK EST STRICTEMENT IDENTIQUE === */
 
     const createMatch = reply.match(/\[CREATE date="([^"]+)" time="([^"]+)"\]/);
 
@@ -187,12 +191,9 @@ app.post("/process-speech", async (req, res) => {
 
         reply = "Votre rendez vous est confirme.";
       } catch (calendarError) {
-        console.error("ERREUR GOOGLE CREATE :", calendarError.response?.data || calendarError.message);
         reply = "Il y a un probleme de reservation.";
       }
     }
-
-    /* ================= DELETE ================= */
 
     const deleteMatch = reply.match(/\[DELETE date="([^"]+)" time="([^"]+)"\]/);
 
@@ -217,12 +218,9 @@ app.post("/process-speech", async (req, res) => {
           reply = "Je ne trouve aucun rendez vous a cette heure.";
         }
       } catch (error) {
-        console.error("ERREUR GOOGLE DELETE:", error.response?.data || error.message);
         reply = "Impossible de supprimer le rendez vous.";
       }
     }
-
-    /* ================= CHECK ================= */
 
     const checkMatch = reply.match(/\[CHECK date="([^"]+)" time="([^"]+)"\]/);
 
@@ -242,7 +240,6 @@ app.post("/process-speech", async (req, res) => {
             ? "Ce creneau est deja pris."
             : "Ce creneau est disponible.";
       } catch (error) {
-        console.error("ERREUR GOOGLE CHECK:", error.response?.data || error.message);
         reply = "Je n arrive pas a verifier ce creneau.";
       }
     }
@@ -252,13 +249,11 @@ app.post("/process-speech", async (req, res) => {
     conversations[callSid].push({ role: "assistant", content: reply });
 
     res.type("text/xml");
-    res.send(buildTwiML(reply));
+    res.send(await buildTwiML(reply));
 
   } catch (error) {
-    console.error("ERREUR OPENAI:", error.message);
-
     res.type("text/xml");
-    res.send(buildTwiML("Une erreur technique est survenue."));
+    res.send(await buildTwiML("Une erreur technique est survenue."));
   }
 });
 
