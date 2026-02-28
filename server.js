@@ -41,7 +41,6 @@ function nowParis() {
   );
 }
 
-/* Blocage année future */
 function createParisDate(year, month, day, hour, minute) {
 
   const now = nowParis();
@@ -126,8 +125,6 @@ const calendar = google.calendar({
 
 const conversations = {};
 
-/* ================= TWIML ================= */
-
 function buildTwiML(message) {
   return `
 <Response>
@@ -144,13 +141,9 @@ function buildTwiML(message) {
 `;
 }
 
-/* ================= ROUTE ================= */
-
 app.get("/", (req, res) => {
   res.send("Cabinet Dr Boutaam actif");
 });
-
-/* ================= APPEL ================= */
 
 app.post("/voice", (req, res) => {
 
@@ -205,8 +198,6 @@ Ne lis jamais les balises.
   res.type("text/xml");
   res.send(buildTwiML("Cabinet médical du Docteur Boutaam, bonjour. Comment puis-je vous aider ?"));
 });
-
-/* ================= TRAITEMENT ================= */
 
 app.post("/process-speech", async (req, res) => {
 
@@ -263,26 +254,19 @@ app.post("/process-speech", async (req, res) => {
           reply = "Ce créneau est déjà réservé. Souhaitez-vous un autre horaire ?";
         } else {
 
-          const previous = await calendar.events.list({
-            calendarId: "primary",
-            q: name,
-            singleEvents: true
-          });
-
-          for (let event of previous.data.items) {
-            await calendar.events.delete({
-              calendarId: "primary",
-              eventId: event.id
-            });
-          }
-
           await calendar.events.insert({
             calendarId: "primary",
             resource: {
               summary: `Consultation - ${name}`,
               description: `Patient : ${name}\nMotif : ${reason}`,
-              start: { dateTime: start.toISOString(), timeZone: TIMEZONE },
-              end: { dateTime: end.toISOString(), timeZone: TIMEZONE }
+              start: {
+                dateTime: start.toLocaleString("sv-SE", { timeZone: TIMEZONE }).replace(" ", "T"),
+                timeZone: TIMEZONE
+              },
+              end: {
+                dateTime: end.toLocaleString("sv-SE", { timeZone: TIMEZONE }).replace(" ", "T"),
+                timeZone: TIMEZONE
+              }
             }
           });
 
