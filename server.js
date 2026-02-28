@@ -55,7 +55,7 @@ function buildTwiML(message) {
 <Response>
   <Gather input="speech"
           timeout="8"
-          speechTimeout="3"
+          speechTimeout="auto"
           language="fr-FR"
           action="/process-speech"
           method="POST">
@@ -85,13 +85,10 @@ Tu es une assistante téléphonique française naturelle et professionnelle.
 
 Date actuelle : ${today}
 
-Règles obligatoires :
-- Format date EXACT : YYYY-MM-DD.
+Règles :
+- Format exact : YYYY-MM-DD.
 - Si année absente, utilise l’année en cours.
-- Si la date est passée cette année, utilise l’année suivante.
-- Corrige automatiquement les fautes.
-
-Actions possibles :
+- Si date passée cette année, utilise l’année suivante.
 
 [CREATE date="YYYY-MM-DD" time="HH:MM"]
 [DELETE date="YYYY-MM-DD" time="HH:MM"]
@@ -122,7 +119,7 @@ app.post("/process-speech", async (req, res) => {
 
   try {
     const completion = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
+      model: "gpt-4o-mini", // modèle plus rapide
       messages: conversations[callSid],
     });
 
@@ -139,15 +136,10 @@ app.post("/process-speech", async (req, res) => {
       const time = createMatch[2];
       const now = new Date();
 
-      // Correction année uniquement si absente
+      // Correction année UNIQUEMENT si absente
       if (date.split("-").length === 2) {
-        const parts = date.split("-");
-        let month = parts[0];
-        let day = parts[1];
-
+        const [month, day] = date.split("-");
         let year = now.getFullYear();
-
-        const candidate = new Date(year, parseInt(month) - 1, parseInt(day));
 
         const todayOnly = new Date(
           now.getFullYear(),
@@ -155,32 +147,29 @@ app.post("/process-speech", async (req, res) => {
           now.getDate()
         );
 
-        if (candidate < todayOnly) {
-          year += 1;
-        }
+        const candidate = new Date(
+          year,
+          parseInt(month) - 1,
+          parseInt(day)
+        );
+
+        if (candidate < todayOnly) year += 1;
 
         date = `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
       }
 
-      // Construction date locale propre
       const [y, m, d] = date.split("-");
       const [hh, mm] = time.split(":");
 
-      const startDateTime = new Date(
-        parseInt(y),
-        parseInt(m) - 1,
-        parseInt(d),
-        parseInt(hh),
-        parseInt(mm)
-      );
-
-      const endDateTime = new Date(startDateTime.getTime() + 60 * 60 * 1000);
+      const startDate = new Date(y, m - 1, d, hh, mm);
+      const endDate = new Date(startDate.getTime() + 60 * 60 * 1000);
 
       try {
+        // Vérification disponibilité
         const existing = await calendar.events.list({
           calendarId: "primary",
-          timeMin: startDateTime.toISOString(),
-          timeMax: endDateTime.toISOString(),
+          timeMin: startDate.toISOString(),
+          timeMax: endDate.toISOString(),
           singleEvents: true,
         });
 
@@ -188,6 +177,7 @@ app.post("/process-speech", async (req, res) => {
           reply = "Ce créneau est déjà réservé.";
         } else {
 
+          // Suppression ancien RDV si modification
           if (lastCreatedEvent[callSid]) {
             try {
               await calendar.events.delete({
@@ -202,11 +192,11 @@ app.post("/process-speech", async (req, res) => {
             resource: {
               summary: "Rendez-vous client",
               start: {
-                dateTime: startDateTime.toISOString(),
+                dateTime: startDate.toISOString(),
                 timeZone: "Europe/Paris",
               },
               end: {
-                dateTime: endDateTime.toISOString(),
+                dateTime: endDate.toISOString(),
                 timeZone: "Europe/Paris",
               },
             },
@@ -215,8 +205,7 @@ app.post("/process-speech", async (req, res) => {
           lastCreatedEvent[callSid] = createdEvent.data.id;
           reply = "Votre rendez-vous est confirmé.";
         }
-
-      } catch (calendarError) {
+      } catch (err) {
         reply = "Un problème est survenu lors de la réservation.";
       }
     }
@@ -229,11 +218,14 @@ app.post("/process-speech", async (req, res) => {
       const date = deleteMatch[1];
       const time = deleteMatch[2];
 
+      const start = new Date(`${date}T${time}:00`);
+      const end = new Date(start.getTime() + 60 * 60 * 1000);
+
       try {
         const events = await calendar.events.list({
           calendarId: "primary",
-          timeMin: `${date}T${time}:00`,
-          timeMax: `${date}T${time}:59`,
+          timeMin: start.toISOString(),
+          timeMax: end.toISOString(),
         });
 
         if (events.data.items.length > 0) {
@@ -245,32 +237,8 @@ app.post("/process-speech", async (req, res) => {
         } else {
           reply = "Je ne trouve aucun rendez-vous à cette heure.";
         }
-      } catch (error) {
+      } catch {
         reply = "Impossible de supprimer le rendez-vous.";
-      }
-    }
-
-    /* ================= CHECK ================= */
-
-    const checkMatch = reply.match(/\[CHECK date="([^"]+)" time="([^"]+)"\]/);
-
-    if (checkMatch) {
-      const date = checkMatch[1];
-      const time = checkMatch[2];
-
-      try {
-        const events = await calendar.events.list({
-          calendarId: "primary",
-          timeMin: `${date}T${time}:00`,
-          timeMax: `${date}T${time}:59`,
-        });
-
-        reply =
-          events.data.items.length > 0
-            ? "Ce créneau est déjà pris."
-            : "Ce créneau est disponible.";
-      } catch (error) {
-        reply = "Je n'arrive pas à vérifier ce créneau.";
       }
     }
 
