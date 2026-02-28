@@ -10,19 +10,33 @@ app.use(express.json());
 
 const TIMEZONE = "Europe/Paris";
 const CONSULT_DURATION = 30; // minutes
-const CURRENT_YEAR = 2026;
 
-/* ================= DATE PARIS ================= */
+/* ================= OUTILS DATE PARIS ================= */
 
-function nowParis() {
+function getParisNow() {
   return new Date(
     new Date().toLocaleString("en-US", { timeZone: TIMEZONE })
   );
 }
 
-function buildParisDate(year, month, day, hour, minute) {
+function buildDateParts(year, month, day, hour, minute) {
+  return {
+    year: parseInt(year),
+    month: parseInt(month),
+    day: parseInt(day),
+    hour: parseInt(hour),
+    minute: parseInt(minute),
+  };
+}
+
+function buildDateObject(parts) {
   return new Date(
-    Date.UTC(year, month - 1, day, hour - 0, minute - 0)
+    parts.year,
+    parts.month - 1,
+    parts.day,
+    parts.hour,
+    parts.minute,
+    0
   );
 }
 
@@ -60,7 +74,6 @@ const calendar = google.calendar({
 /* ================= MEMOIRE ================= */
 
 const conversations = {};
-const patientSessions = {};
 
 /* ================= TWIML ================= */
 
@@ -83,42 +96,38 @@ function buildTwiML(message) {
 /* ================= ROUTE ================= */
 
 app.get("/", (req, res) => {
-  res.send("Cabinet Dr Boutaam actif");
+  res.send("Cabinet médical Dr Boutaam actif");
 });
 
-/* ================= APPEL INITIAL ================= */
+/* ================= APPEL ================= */
 
 app.post("/voice", (req, res) => {
 
   const callSid = req.body.CallSid;
-
-  patientSessions[callSid] = {
-    name: null,
-    reason: null,
-  };
+  const today = getParisNow();
 
   conversations[callSid] = [
     {
       role: "system",
       content: `
-Nous sommes le 28 février 2026.
-Fuseau obligatoire : Europe/Paris.
+Nous sommes le ${today.toLocaleDateString("fr-FR")} en France.
+Fuseau horaire : Europe/Paris.
 
 Tu es la secrétaire humaine du Docteur Boutaam.
 
-Règles ABSOLUES :
+RÈGLES STRICTES :
 
 - Consultation = 30 minutes.
-- Heure exacte demandée (9h = 09:00).
+- Si patient dit 9h → 09:00 EXACTEMENT.
 - Format 24h uniquement.
-- Si année absente → 2026.
-- Si date passée en 2026 → 2027.
 - Toujours vérifier le créneau EXACT demandé.
 - Ne jamais inventer une disponibilité.
-- Toujours vérifier le calendrier réel.
-- Modification = suppression puis recréation.
-- Aucun doublon.
-- Un patient ne peut gérer que SON rendez-vous.
+- Si date absente → la déduire intelligemment.
+- Si date passée cette année → proposer année suivante.
+- Modification = suppression complète + recréation.
+- Supprimer tous anciens RDV du patient avant recréation.
+- Aucun doublon possible.
+- Un patient ne peut supprimer que SON RDV.
 - Toujours demander nom + motif si manquant.
 - Être naturelle et conversationnelle.
 
@@ -145,7 +154,7 @@ app.post("/process-speech", async (req, res) => {
   const callSid = req.body.CallSid;
 
   if (!speech) {
-    return res.type("text/xml").send(buildTwiML("Je ne vous entends plus. Je vous souhaite une excellente journée."));
+    return res.type("text/xml").send(buildTwiML("Je ne vous entends plus. Bonne journée."));
   }
 
   conversations[callSid].push({ role: "user", content: speech });
@@ -167,15 +176,14 @@ app.post("/process-speech", async (req, res) => {
 
       const name = createMatch[1];
       const reason = createMatch[2];
-      let [year, month, day] = createMatch[3].split("-");
+      const [year, month, day] = createMatch[3].split("-");
       const [hour, minute] = createMatch[4].split(":");
 
-      year = parseInt(year) || CURRENT_YEAR;
-
-      const start = buildParisDate(year, month, day, hour, minute);
+      const parts = buildDateParts(year, month, day, hour, minute);
+      const start = buildDateObject(parts);
       const end = new Date(start.getTime() + CONSULT_DURATION * 60000);
 
-      // Vérification exacte créneau
+      // Vérification EXACTE du créneau demandé
       const existing = await calendar.events.list({
         calendarId: "primary",
         timeMin: start.toISOString(),
@@ -189,7 +197,7 @@ app.post("/process-speech", async (req, res) => {
 
       } else {
 
-        // Supprime ancien RDV même nom (anti doublon)
+        // Supprime tous anciens RDV du même patient
         const previous = await calendar.events.list({
           calendarId: "primary",
           q: name,
@@ -208,8 +216,14 @@ app.post("/process-speech", async (req, res) => {
           resource: {
             summary: `Consultation - ${name}`,
             description: `Patient : ${name}\nMotif : ${reason}`,
-            start: { dateTime: start.toISOString(), timeZone: TIMEZONE },
-            end: { dateTime: end.toISOString(), timeZone: TIMEZONE },
+            start: {
+              dateTime: start.toISOString(),
+              timeZone: TIMEZONE
+            },
+            end: {
+              dateTime: end.toISOString(),
+              timeZone: TIMEZONE
+            },
           },
         });
 
@@ -252,15 +266,14 @@ app.post("/process-speech", async (req, res) => {
 
       const name = modifyMatch[1];
       const reason = modifyMatch[2];
-      let [year, month, day] = modifyMatch[3].split("-");
+      const [year, month, day] = modifyMatch[3].split("-");
       const [hour, minute] = modifyMatch[4].split(":");
 
-      year = parseInt(year) || CURRENT_YEAR;
-
-      const start = buildParisDate(year, month, day, hour, minute);
+      const parts = buildDateParts(year, month, day, hour, minute);
+      const start = buildDateObject(parts);
       const end = new Date(start.getTime() + CONSULT_DURATION * 60000);
 
-      // Supprime ancien
+      // Supprime ancien RDV
       const previous = await calendar.events.list({
         calendarId: "primary",
         q: name,
@@ -288,14 +301,13 @@ app.post("/process-speech", async (req, res) => {
     }
 
     reply = reply.replace(/\[.*?\]/g, "").trim();
-    conversations[callSid].push({ role: "assistant", content: reply });
 
     res.type("text/xml");
     res.send(buildTwiML(reply));
 
   } catch (error) {
     res.type("text/xml");
-    res.send(buildTwiML("Une erreur technique est survenue. Merci de rappeler."));
+    res.send(buildTwiML("Une erreur technique est survenue."));
   }
 });
 
