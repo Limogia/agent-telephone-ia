@@ -41,20 +41,24 @@ function nowParis() {
   );
 }
 
-/* 🔥 MODIFICATION ICI */
+/* 🔥 MODIFICATION 1 : blocage année 2027 */
 function createParisDate(year, month, day, hour, minute) {
 
   const now = nowParis();
+  const currentYear = now.getFullYear();
+
   let finalYear = parseInt(year);
 
-  if (!finalYear || finalYear < now.getFullYear()) {
-    finalYear = now.getFullYear();
+  // On n'autorise que l'année actuelle ou suivante
+  if (!finalYear || (finalYear !== currentYear && finalYear !== currentYear + 1)) {
+    finalYear = currentYear;
   }
 
   let date = new Date(finalYear, month - 1, day, hour, minute, 0);
 
+  // Si date passée → année suivante (max +1)
   if (date < now) {
-    date = new Date(finalYear + 1, month - 1, day, hour, minute, 0);
+    date = new Date(currentYear + 1, month - 1, day, hour, minute, 0);
   }
 
   return date;
@@ -173,7 +177,8 @@ RÈGLES :
 - Ne jamais inventer une disponibilité.
 - Modification = suppression puis recréation.
 - Aucun doublon.
-- Toujours demander nom + motif si manquant.
+- Demander le nom et le motif UNIQUEMENT s'ils n'ont jamais été fournis.
+- Ne jamais redemander une information déjà donnée.
 - Cabinet ouvert :
   - Lundi à vendredi 8h–18h
   - Samedi 8h–12h
@@ -231,7 +236,6 @@ app.post("/process-speech", async (req, res) => {
       const name = createMatch[1];
       const reason = createMatch[2];
 
-      /* 🔥 MODIFICATION ICI */
       let parts = createMatch[3].split("-");
       let year = parts[0];
       let month = parts[1];
