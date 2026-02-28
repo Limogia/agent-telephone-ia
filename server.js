@@ -1,7 +1,7 @@
 const express = require("express");
 const { google } = require("googleapis");
 const OpenAI = require("openai");
-const twilio = require("twilio"); // ✅ AJOUT
+const twilio = require("twilio");
 
 const app = express();
 app.use(express.urlencoded({ extended: false }));
@@ -12,7 +12,7 @@ app.use(express.json());
 const TIMEZONE = "Europe/Paris";
 const CONSULT_DURATION = 30;
 
-/* ================= TWILIO SMS CONFIG ================= */ // ✅ AJOUT
+/* ================= TWILIO SMS CONFIG ================= */
 
 const twilioClient = twilio(
   process.env.TWILIO_ACCOUNT_SID,
@@ -164,7 +164,8 @@ RÈGLES :
   - Lundi à vendredi 8h–18h
   - Samedi 8h–12h
   - Dimanche fermé
-- Être naturelle et intelligente.
+- Ne jamais tutoyer un patient.
+- Toujours utiliser le vouvoiement.
 
 Balises :
 
@@ -187,7 +188,7 @@ app.post("/process-speech", async (req, res) => {
 
   const speech = (req.body.SpeechResult || "").trim();
   const callSid = req.body.CallSid;
-  const callerNumber = req.body.From; // ✅ AJOUT (numéro patient)
+  const callerNumber = req.body.From;
 
   if (!speech) {
     return res.type("text/xml").send(buildTwiML("Je ne vous entends plus. Bonne journée."));
@@ -214,56 +215,38 @@ app.post("/process-speech", async (req, res) => {
       const [hour, minute] = createMatch[4].split(":");
 
       let start = createParisDate(year, month, day, hour, minute);
+      let end = new Date(start.getTime() + CONSULT_DURATION * 60000);
 
-      if (!isCabinetOpen(start)) {
-        const proposal = nextOpeningSlot(start);
-        reply = `Le cabinet est fermé à cet horaire. Je peux vous proposer le ${formatFR(proposal)}. Cela vous convient-il ?`;
+      const startString = `${year}-${month}-${day}T${hour}:${minute}:00`;
+      const endString = `${year}-${month}-${day}T${end.getHours().toString().padStart(2,"0")}:${end.getMinutes().toString().padStart(2,"0")}:00`;
+
+      const existing = await calendar.events.list({
+        calendarId: "primary",
+        timeMin: startString,
+        timeMax: endString,
+        singleEvents: true
+      });
+
+      if (existing.data.items.length > 0) {
+        reply = "Ce créneau est déjà réservé. Souhaitez-vous un autre horaire ?";
       } else {
 
-        const end = new Date(start.getTime() + CONSULT_DURATION * 60000);
-
-        const existing = await calendar.events.list({
+        await calendar.events.insert({
           calendarId: "primary",
-          timeMin: start.toISOString(),
-          timeMax: end.toISOString(),
-          singleEvents: true
+          resource: {
+            summary: `Consultation - ${name}`,
+            description: `Patient : ${name}\nMotif : ${reason}`,
+            start: { dateTime: startString, timeZone: TIMEZONE },
+            end: { dateTime: endString, timeZone: TIMEZONE }
+          }
         });
 
-        if (existing.data.items.length > 0) {
-          reply = "Ce créneau est déjà réservé. Souhaitez-vous un autre horaire ?";
-        } else {
+        reply = `Votre rendez-vous est confirmé le ${formatFR(start)}.`;
 
-          const previous = await calendar.events.list({
-            calendarId: "primary",
-            q: name,
-            singleEvents: true
-          });
-
-          for (let event of previous.data.items) {
-            await calendar.events.delete({
-              calendarId: "primary",
-              eventId: event.id
-            });
-          }
-
-          await calendar.events.insert({
-            calendarId: "primary",
-            resource: {
-              summary: `Consultation - ${name}`,
-              description: `Patient : ${name}\nMotif : ${reason}`,
-              start: { dateTime: start.toISOString(), timeZone: TIMEZONE },
-              end: { dateTime: end.toISOString(), timeZone: TIMEZONE }
-            }
-          });
-
-          reply = `Votre rendez-vous est confirmé le ${formatFR(start)}.`;
-
-          // ✅ ENVOI SMS AUTOMATIQUE
-          await sendConfirmationSMS(
-            callerNumber,
-            `Bonjour ${name}, votre rendez-vous est confirmé le ${formatFR(start)} avec le Dr Boutaam.`
-          );
-        }
+        await sendConfirmationSMS(
+          callerNumber,
+          `Bonjour ${name}, votre rendez-vous est confirmé le ${formatFR(start)} avec le Dr Boutaam.`
+        );
       }
     }
 
