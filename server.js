@@ -12,12 +12,26 @@ app.use(express.json());
 const TIMEZONE = "Europe/Paris";
 const CONSULT_DURATION = 30;
 
-/* ================= TWILIO ================= */
+/* ================= TWILIO SMS CONFIG ================= */
 
-const smsClient = twilio(
+const twilioClient = twilio(
   process.env.TWILIO_ACCOUNT_SID,
   process.env.TWILIO_AUTH_TOKEN
 );
+
+async function sendConfirmationSMS(to, message) {
+  try {
+    await twilioClient.messages.create({
+      messagingServiceSid: process.env.TWILIO_MESSAGING_SERVICE_SID,
+      to: to,
+      body: message
+    });
+
+    console.log("SMS envoyé avec succès à " + to);
+  } catch (error) {
+    console.error("Erreur envoi SMS:", error.message);
+  }
+}
 
 /* ================= DATE PARIS ================= */
 
@@ -27,8 +41,23 @@ function nowParis() {
   );
 }
 
-function createLocalDate(year, month, day, hour, minute) {
-  return new Date(year, month - 1, day, hour, minute, 0);
+/* 🔥 MODIFICATION ICI */
+function createParisDate(year, month, day, hour, minute) {
+
+  const now = nowParis();
+  let finalYear = parseInt(year);
+
+  if (!finalYear || finalYear < now.getFullYear()) {
+    finalYear = now.getFullYear();
+  }
+
+  let date = new Date(finalYear, month - 1, day, hour, minute, 0);
+
+  if (date < now) {
+    date = new Date(finalYear + 1, month - 1, day, hour, minute, 0);
+  }
+
+  return date;
 }
 
 function formatFR(date) {
@@ -41,22 +70,30 @@ function formatFR(date) {
 
 /* ================= HORAIRES CABINET ================= */
 
-function isOpen(date) {
-  const day = date.getDay(); // 0 = dimanche
+function isCabinetOpen(date) {
+  const day = date.getDay();
   const hour = date.getHours();
 
   if (day === 0) return false;
-  if (day >= 1 && day <= 5) return hour >= 8 && hour < 18;
-  if (day === 6) return hour >= 8 && hour < 12;
+
+  if (day >= 1 && day <= 5) {
+    return hour >= 8 && hour < 18;
+  }
+
+  if (day === 6) {
+    return hour >= 8 && hour < 12;
+  }
 
   return false;
 }
 
-function nextOpenSlot(date) {
+function nextOpeningSlot(date) {
   let test = new Date(date);
-  while (!isOpen(test)) {
+
+  while (!isCabinetOpen(test)) {
     test = new Date(test.getTime() + CONSULT_DURATION * 60000);
   }
+
   return test;
 }
 
@@ -123,22 +160,31 @@ app.post("/voice", (req, res) => {
       role: "system",
       content: `
 Nous sommes le ${today.toLocaleDateString("fr-FR")} en France.
-Fuseau horaire : Europe/Paris.
+Fuseau horaire officiel : Europe/Paris.
 
-Vous êtes la secrétaire professionnelle du Docteur Boutaam.
+Tu es la secrétaire humaine du Docteur Boutaam.
 
-RÈGLES STRICTES :
+RÈGLES :
 
 - Consultation = 30 minutes.
-- Heure EXACTE demandée.
-- Ne jamais modifier l'heure donnée.
-- Ne jamais ajouter +1h.
-- Ne jamais annoncer un jour de la semaine sans que le serveur le calcule.
-- Toujours vérifier le créneau exact demandé.
+- Heure EXACTE demandée (9h = 09:00).
+- Format 24h uniquement.
+- Toujours vérifier le créneau EXACT demandé.
 - Ne jamais inventer une disponibilité.
+- Modification = suppression puis recréation.
 - Aucun doublon.
-- Toujours utiliser le vouvoiement.
-- Demander nom + motif si manquants.
+- Toujours demander nom + motif si manquant.
+- Cabinet ouvert :
+  - Lundi à vendredi 8h–18h
+  - Samedi 8h–12h
+  - Dimanche fermé
+
+GESTION DES DATES :
+
+- Si l'année n'est PAS précisée → utiliser l'année actuelle.
+- Si la date demandée est déjà passée → utiliser l'année suivante.
+- Toujours raisonner en Europe/Paris.
+- Vérifier que le jour correspond au vrai calendrier.
 
 Balises :
 
@@ -146,7 +192,7 @@ Balises :
 [DELETE name="NOM"]
 [MODIFY name="NOM" reason="MOTIF" date="YYYY-MM-DD" time="HH:MM"]
 
-Ne jamais lire les balises.
+Ne lis jamais les balises.
 `
     }
   ];
@@ -178,57 +224,70 @@ app.post("/process-speech", async (req, res) => {
 
     let reply = completion.choices[0].message.content;
 
-    /* ================= CREATE ================= */
-
     const createMatch = reply.match(/\[CREATE name="([^"]+)" reason="([^"]+)" date="([^"]+)" time="([^"]+)"\]/);
 
     if (createMatch) {
 
       const name = createMatch[1];
       const reason = createMatch[2];
-      const [year, month, day] = createMatch[3].split("-");
-      const [hour, minute] = createMatch[4].split(":"); 
 
-      const start = createLocalDate(year, month, day, hour, minute);
-      const end = new Date(start.getTime() + CONSULT_DURATION * 60000);
+      /* 🔥 MODIFICATION ICI */
+      let parts = createMatch[3].split("-");
+      let year = parts[0];
+      let month = parts[1];
+      let day = parts[2];
 
-      const startString = `${year}-${month}-${day}T${hour}:${minute}:00`;
-      const endString = `${year}-${month}-${day}T${end.getHours().toString().padStart(2,"0")}:${end.getMinutes().toString().padStart(2,"0")}:00`;
+      const [hour, minute] = createMatch[4].split(":");
 
-      if (!isOpen(start)) {
-        const proposal = nextOpenSlot(start);
-        reply = `Le cabinet est fermé à cet horaire. Je peux vous proposer le ${formatFR(proposal)}.`;
+      let start = createParisDate(year, month, day, hour, minute);
+
+      if (!isCabinetOpen(start)) {
+        const proposal = nextOpeningSlot(start);
+        reply = `Le cabinet est fermé à cet horaire. Je peux vous proposer le ${formatFR(proposal)}. Cela vous convient-il ?`;
       } else {
+
+        const end = new Date(start.getTime() + CONSULT_DURATION * 60000);
 
         const existing = await calendar.events.list({
           calendarId: "primary",
-          timeMin: startString,
-          timeMax: endString,
-          singleEvents: true,
-          timeZone: TIMEZONE
+          timeMin: start.toISOString(),
+          timeMax: end.toISOString(),
+          singleEvents: true
         });
 
         if (existing.data.items.length > 0) {
           reply = "Ce créneau est déjà réservé. Souhaitez-vous un autre horaire ?";
         } else {
 
+          const previous = await calendar.events.list({
+            calendarId: "primary",
+            q: name,
+            singleEvents: true
+          });
+
+          for (let event of previous.data.items) {
+            await calendar.events.delete({
+              calendarId: "primary",
+              eventId: event.id
+            });
+          }
+
           await calendar.events.insert({
             calendarId: "primary",
             resource: {
               summary: `Consultation - ${name}`,
               description: `Patient : ${name}\nMotif : ${reason}`,
-              start: { dateTime: startString, timeZone: TIMEZONE },
-              end: { dateTime: endString, timeZone: TIMEZONE }
+              start: { dateTime: start.toISOString(), timeZone: TIMEZONE },
+              end: { dateTime: end.toISOString(), timeZone: TIMEZONE }
             }
           });
 
           reply = `Votre rendez-vous est confirmé le ${formatFR(start)}.`;
 
-          await smsClient.messages.create({
-            messagingServiceSid: process.env.TWILIO_MESSAGING_SERVICE_SID,
-            to: callerNumber,
-            body: `Cabinet Dr Boutaam : Votre rendez-vous est confirmé le ${formatFR(start)}.`
-          });
+          await sendConfirmationSMS(
+            callerNumber,
+            `Bonjour ${name}, votre rendez-vous est confirmé le ${formatFR(start)} avec le Dr Boutaam.`
+          );
         }
       }
     }
@@ -243,6 +302,8 @@ app.post("/process-speech", async (req, res) => {
     res.send(buildTwiML("Une erreur technique est survenue."));
   }
 });
+
+/* ================= SERVER ================= */
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
