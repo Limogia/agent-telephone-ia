@@ -41,7 +41,7 @@ function nowParis() {
   );
 }
 
-/* 🔥 MODIFICATION 1 : blocage année 2027 */
+/* Blocage année future */
 function createParisDate(year, month, day, hour, minute) {
 
   const now = nowParis();
@@ -49,14 +49,12 @@ function createParisDate(year, month, day, hour, minute) {
 
   let finalYear = parseInt(year);
 
-  // On n'autorise que l'année actuelle ou suivante
   if (!finalYear || (finalYear !== currentYear && finalYear !== currentYear + 1)) {
     finalYear = currentYear;
   }
 
   let date = new Date(finalYear, month - 1, day, hour, minute, 0);
 
-  // Si date passée → année suivante (max +1)
   if (date < now) {
     date = new Date(currentYear + 1, month - 1, day, hour, minute, 0);
   }
@@ -189,7 +187,9 @@ GESTION DES DATES :
 - Si l'année n'est PAS précisée → utiliser l'année actuelle.
 - Si la date demandée est déjà passée → utiliser l'année suivante.
 - Toujours raisonner en Europe/Paris.
-- Vérifier que le jour correspond au vrai calendrier.
+- Ne jamais essayer de recalculer le jour de la semaine.
+- Si le patient dit "mardi 10 mars", faire confiance à la date numérique.
+- Ne jamais contredire le patient sur le jour sauf incohérence évidente.
 
 Balises :
 
@@ -306,8 +306,6 @@ app.post("/process-speech", async (req, res) => {
     res.send(buildTwiML("Une erreur technique est survenue."));
   }
 });
-
-/* ================= SERVER ================= */
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
