@@ -53,7 +53,7 @@ function buildTwiML(message) {
   return `
 <Response>
   <Gather input="speech" timeout="5" speechTimeout="auto" language="fr-FR" action="/process-speech" method="POST">
-    <Say language="fr-FR">
+    <Say voice="Polly.Celine" language="fr-FR">
       ${message}
     </Say>
   </Gather>
@@ -71,19 +71,32 @@ app.get("/", (req, res) => {
 
 app.post("/voice", (req, res) => {
   const callSid = req.body.CallSid;
+  const today = new Date().toISOString().split("T")[0];
 
   conversations[callSid] = [
     {
       role: "system",
       content: `
 Tu es une assistante telephonique francaise naturelle.
-Quand une action est necessaire, termine par :
+
+La date actuelle est : ${today}
+
+REGLES IMPORTANTES :
+
+- Si l utilisateur ne precise pas l annee, utilise l annee en cours.
+- Si la date est deja passee cette annee, utilise l annee suivante.
+- Si la date est relative (demain, lundi prochain, dans deux semaines), convertis en date exacte.
+- Si on parle du meme rendez vous, ne le recrée jamais.
+- Si meme date et meme heure existent deja, confirme simplement.
+
+Quand une action est necessaire, termine STRICTEMENT par :
 
 [CREATE date="YYYY-MM-DD" time="HH:MM"]
 [DELETE date="YYYY-MM-DD" time="HH:MM"]
 [CHECK date="YYYY-MM-DD" time="HH:MM"]
 
 Ne lis jamais les balises.
+Ne mets rien apres les balises.
 `,
     },
   ];
@@ -113,11 +126,9 @@ app.post("/process-speech", async (req, res) => {
       messages: conversations[callSid],
     });
 
-    let reply =
-      completion?.choices?.[0]?.message?.content ||
-      "Je n ai pas compris.";
+    let reply = completion?.choices?.[0]?.message?.content || "Je n ai pas compris.";
 
-    /* ================= CREATE (CORRIGÉ) ================= */
+    /* ================= CREATE INTELLIGENT ================= */
 
     const createMatch = reply.match(/\[CREATE date="([^"]+)" time="([^"]+)"\]/);
 
@@ -125,27 +136,49 @@ app.post("/process-speech", async (req, res) => {
       const date = createMatch[1];
       const time = createMatch[2];
 
-      const startDateTime = `${date}T${time}:00`;
-      const endDate = new Date(`${date}T${time}:00`);
-      const endDateTime = new Date(endDate.getTime() + 60 * 60 * 1000);
+      const startISO = new Date(`${date}T${time}:00`).toISOString();
+      const endISO = new Date(new Date(startISO).getTime() + 60 * 60 * 1000).toISOString();
 
       try {
-        await calendar.events.insert({
+        const existingEvents = await calendar.events.list({
           calendarId: "primary",
-          resource: {
-            summary: "Rendez vous client",
-            start: {
-              dateTime: startDateTime,
-              timeZone: "Europe/Paris",
-            },
-            end: {
-              dateTime: `${date}T${String(endDateTime.getHours()).padStart(2,"0")}:${String(endDateTime.getMinutes()).padStart(2,"0")}:00`,
-              timeZone: "Europe/Paris",
-            },
-          },
+          timeMin: startISO,
+          timeMax: endISO,
+          singleEvents: true,
         });
 
-        reply = "Votre rendez vous est confirme.";
+        if (existingEvents.data.items.length > 0) {
+          const existingEvent = existingEvents.data.items[0];
+          const existingStart = new Date(existingEvent.start.dateTime).toISOString();
+          const existingEnd = new Date(existingEvent.end.dateTime).toISOString();
+
+          if (existingStart === startISO && existingEnd === endISO) {
+            reply = "Ce rendez vous existe deja.";
+          } else {
+            await calendar.events.update({
+              calendarId: "primary",
+              eventId: existingEvent.id,
+              requestBody: {
+                summary: "Rendez vous client",
+                start: { dateTime: startISO, timeZone: "Europe/Paris" },
+                end: { dateTime: endISO, timeZone: "Europe/Paris" },
+              },
+            });
+
+            reply = "Votre rendez vous a ete modifie.";
+          }
+        } else {
+          await calendar.events.insert({
+            calendarId: "primary",
+            requestBody: {
+              summary: "Rendez vous client",
+              start: { dateTime: startISO, timeZone: "Europe/Paris" },
+              end: { dateTime: endISO, timeZone: "Europe/Paris" },
+            },
+          });
+
+          reply = "Votre rendez vous est confirme.";
+        }
       } catch (calendarError) {
         console.error("ERREUR GOOGLE CREATE :", calendarError.response?.data || calendarError.message);
         reply = "Il y a un probleme de reservation.";
@@ -161,10 +194,14 @@ app.post("/process-speech", async (req, res) => {
       const time = deleteMatch[2];
 
       try {
+        const startISO = new Date(`${date}T${time}:00`).toISOString();
+        const endISO = new Date(new Date(startISO).getTime() + 60 * 60 * 1000).toISOString();
+
         const events = await calendar.events.list({
           calendarId: "primary",
-          timeMin: `${date}T${time}:00+01:00`,
-          timeMax: `${date}T${time}:59+01:00`,
+          timeMin: startISO,
+          timeMax: endISO,
+          singleEvents: true,
         });
 
         if (events.data.items.length > 0) {
@@ -191,10 +228,14 @@ app.post("/process-speech", async (req, res) => {
       const time = checkMatch[2];
 
       try {
+        const startISO = new Date(`${date}T${time}:00`).toISOString();
+        const endISO = new Date(new Date(startISO).getTime() + 60 * 60 * 1000).toISOString();
+
         const events = await calendar.events.list({
           calendarId: "primary",
-          timeMin: `${date}T${time}:00+01:00`,
-          timeMax: `${date}T${time}:59+01:00`,
+          timeMin: startISO,
+          timeMax: endISO,
+          singleEvents: true,
         });
 
         reply =
@@ -216,21 +257,8 @@ app.post("/process-speech", async (req, res) => {
 
   } catch (error) {
     console.error("ERREUR OPENAI:", error.message);
-
     res.type("text/xml");
     res.send(buildTwiML("Une erreur technique est survenue."));
-  }
-});
-
-/* ================= TEST GOOGLE ================= */
-
-app.get("/test-google", async (req, res) => {
-  try {
-    const result = await calendar.calendarList.list();
-    res.json(result.data);
-  } catch (error) {
-    console.error("ERREUR GOOGLE TEST :", error.response?.data || error.message);
-    res.status(500).json({ error: error.response?.data || error.message });
   }
 });
 
