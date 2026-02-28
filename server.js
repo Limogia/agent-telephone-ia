@@ -49,7 +49,21 @@ function escapeXml(text) {
 
 /* ================= ELEVENLABS ================= */
 
+const fs = require("fs");
+const path = require("path");
+
+const audioDir = path.join(__dirname, "audio");
+
+if (!fs.existsSync(audioDir)) {
+  fs.mkdirSync(audioDir);
+}
+
+app.use("/audio", express.static(audioDir));
+
 async function generateSpeech(text) {
+  const fileName = `speech_${Date.now()}.mp3`;
+  const filePath = path.join(audioDir, fileName);
+
   const response = await axios({
     method: "POST",
     url: `https://api.elevenlabs.io/v1/text-to-speech/${process.env.EMILIEVOICE_ID}`,
@@ -68,18 +82,27 @@ async function generateSpeech(text) {
     responseType: "arraybuffer"
   });
 
-  return Buffer.from(response.data).toString("base64");
+  fs.writeFileSync(filePath, response.data);
+
+  // nettoyage automatique après 60 secondes
+  setTimeout(() => {
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+    }
+  }, 60000);
+
+  return fileName;
 }
 
 async function buildTwiML(message) {
   message = escapeXml(message);
   if (!message || message.length < 2) message = "Tres bien.";
 
-  const audioBase64 = await generateSpeech(message);
+  const fileName = await generateSpeech(message);
 
   return `
 <Response>
-  <Play>data:audio/mpeg;base64,${audioBase64}</Play>
+  <Play>${process.env.BASE_URL}/audio/${fileName}</Play>
   <Gather input="speech" timeout="5" speechTimeout="auto" language="fr-FR" action="/process-speech" method="POST" />
 </Response>
 `;
