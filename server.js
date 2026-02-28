@@ -9,49 +9,32 @@ app.use(express.json());
 /* ================= CONFIG ================= */
 
 const TIMEZONE = "Europe/Paris";
-const CONSULT_DURATION = 30; // minutes
+const CONSULT_DURATION = 30;
 
-/* ================= OUTILS DATE PARIS ================= */
+/* ================= DATE FRANCE ================= */
 
-function getParisNow() {
+function nowParis() {
   return new Date(
     new Date().toLocaleString("en-US", { timeZone: TIMEZONE })
   );
 }
 
-function buildDateParts(year, month, day, hour, minute) {
-  return {
-    year: parseInt(year),
-    month: parseInt(month),
-    day: parseInt(day),
-    hour: parseInt(hour),
-    minute: parseInt(minute),
-  };
-}
-
-function buildDateObject(parts) {
-  return new Date(
-    parts.year,
-    parts.month - 1,
-    parts.day,
-    parts.hour,
-    parts.minute,
-    0
-  );
+function createParisDate(year, month, day, hour, minute) {
+  return new Date(year, month - 1, day, hour, minute, 0);
 }
 
 function formatFR(date) {
   return date.toLocaleString("fr-FR", {
     timeZone: TIMEZONE,
     dateStyle: "full",
-    timeStyle: "short",
+    timeStyle: "short"
   });
 }
 
 /* ================= OPENAI ================= */
 
 const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
+  apiKey: process.env.OPENAI_API_KEY
 });
 
 /* ================= GOOGLE ================= */
@@ -63,12 +46,12 @@ const oAuth2Client = new google.auth.OAuth2(
 );
 
 oAuth2Client.setCredentials({
-  refresh_token: process.env.GOOGLE_REFRESH_TOKEN,
+  refresh_token: process.env.GOOGLE_REFRESH_TOKEN
 });
 
 const calendar = google.calendar({
   version: "v3",
-  auth: oAuth2Client,
+  auth: oAuth2Client
 });
 
 /* ================= MEMOIRE ================= */
@@ -96,7 +79,7 @@ function buildTwiML(message) {
 /* ================= ROUTE ================= */
 
 app.get("/", (req, res) => {
-  res.send("Cabinet médical Dr Boutaam actif");
+  res.send("Cabinet Dr Boutaam actif");
 });
 
 /* ================= APPEL ================= */
@@ -104,7 +87,7 @@ app.get("/", (req, res) => {
 app.post("/voice", (req, res) => {
 
   const callSid = req.body.CallSid;
-  const today = getParisNow();
+  const today = nowParis();
 
   conversations[callSid] = [
     {
@@ -115,21 +98,19 @@ Fuseau horaire : Europe/Paris.
 
 Tu es la secrétaire humaine du Docteur Boutaam.
 
-RÈGLES STRICTES :
+RÈGLES :
 
 - Consultation = 30 minutes.
-- Si patient dit 9h → 09:00 EXACTEMENT.
+- Si patient dit 9h → 09:00 EXACT.
 - Format 24h uniquement.
 - Toujours vérifier le créneau EXACT demandé.
-- Ne jamais inventer une disponibilité.
-- Si date absente → la déduire intelligemment.
-- Si date passée cette année → proposer année suivante.
-- Modification = suppression complète + recréation.
-- Supprimer tous anciens RDV du patient avant recréation.
-- Aucun doublon possible.
-- Un patient ne peut supprimer que SON RDV.
+- Ne jamais inventer de disponibilité.
+- Si date absente → la déduire.
+- Si date passée → proposer année suivante.
+- Modification = suppression puis recréation.
+- Aucun doublon.
 - Toujours demander nom + motif si manquant.
-- Être naturelle et conversationnelle.
+- Être naturelle.
 
 Balises :
 
@@ -138,8 +119,8 @@ Balises :
 [MODIFY name="NOM" reason="MOTIF" date="YYYY-MM-DD" time="HH:MM"]
 
 Ne lis jamais les balises.
-`,
-    },
+`
+    }
   ];
 
   res.type("text/xml");
@@ -163,7 +144,7 @@ app.post("/process-speech", async (req, res) => {
 
     const completion = await openai.chat.completions.create({
       model: "gpt-4o-mini",
-      messages: conversations[callSid],
+      messages: conversations[callSid]
     });
 
     let reply = completion.choices[0].message.content;
@@ -179,16 +160,15 @@ app.post("/process-speech", async (req, res) => {
       const [year, month, day] = createMatch[3].split("-");
       const [hour, minute] = createMatch[4].split(":");
 
-      const parts = buildDateParts(year, month, day, hour, minute);
-      const start = buildDateObject(parts);
+      const start = createParisDate(year, month, day, hour, minute);
       const end = new Date(start.getTime() + CONSULT_DURATION * 60000);
 
-      // Vérification EXACTE du créneau demandé
+      // Vérification EXACTE
       const existing = await calendar.events.list({
         calendarId: "primary",
         timeMin: start.toISOString(),
         timeMax: end.toISOString(),
-        singleEvents: true,
+        singleEvents: true
       });
 
       if (existing.data.items.length > 0) {
@@ -197,17 +177,17 @@ app.post("/process-speech", async (req, res) => {
 
       } else {
 
-        // Supprime tous anciens RDV du même patient
+        // Supprime ancien RDV même nom
         const previous = await calendar.events.list({
           calendarId: "primary",
           q: name,
-          singleEvents: true,
+          singleEvents: true
         });
 
         for (let event of previous.data.items) {
           await calendar.events.delete({
             calendarId: "primary",
-            eventId: event.id,
+            eventId: event.id
           });
         }
 
@@ -223,8 +203,8 @@ app.post("/process-speech", async (req, res) => {
             end: {
               dateTime: end.toISOString(),
               timeZone: TIMEZONE
-            },
-          },
+            }
+          }
         });
 
         reply = `Votre rendez-vous est confirmé le ${formatFR(start)}.`;
@@ -242,7 +222,7 @@ app.post("/process-speech", async (req, res) => {
       const events = await calendar.events.list({
         calendarId: "primary",
         q: name,
-        singleEvents: true,
+        singleEvents: true
       });
 
       if (events.data.items.length === 0) {
@@ -251,7 +231,7 @@ app.post("/process-speech", async (req, res) => {
         for (let event of events.data.items) {
           await calendar.events.delete({
             calendarId: "primary",
-            eventId: event.id,
+            eventId: event.id
           });
         }
         reply = "Votre rendez-vous a été supprimé.";
@@ -269,21 +249,20 @@ app.post("/process-speech", async (req, res) => {
       const [year, month, day] = modifyMatch[3].split("-");
       const [hour, minute] = modifyMatch[4].split(":");
 
-      const parts = buildDateParts(year, month, day, hour, minute);
-      const start = buildDateObject(parts);
+      const start = createParisDate(year, month, day, hour, minute);
       const end = new Date(start.getTime() + CONSULT_DURATION * 60000);
 
-      // Supprime ancien RDV
+      // Supprime ancien
       const previous = await calendar.events.list({
         calendarId: "primary",
         q: name,
-        singleEvents: true,
+        singleEvents: true
       });
 
       for (let event of previous.data.items) {
         await calendar.events.delete({
           calendarId: "primary",
-          eventId: event.id,
+          eventId: event.id
         });
       }
 
@@ -293,8 +272,8 @@ app.post("/process-speech", async (req, res) => {
           summary: `Consultation - ${name}`,
           description: `Patient : ${name}\nMotif : ${reason}`,
           start: { dateTime: start.toISOString(), timeZone: TIMEZONE },
-          end: { dateTime: end.toISOString(), timeZone: TIMEZONE },
-        },
+          end: { dateTime: end.toISOString(), timeZone: TIMEZONE }
+        }
       });
 
       reply = `Votre rendez-vous a été déplacé au ${formatFR(start)}.`;
