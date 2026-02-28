@@ -1,5 +1,3 @@
-
-Vous avez dit :
 const express = require("express");
 const { google } = require("googleapis");
 const OpenAI = require("openai");
@@ -52,7 +50,7 @@ function buildTwiML(message) {
   message = escapeXml(message);
   if (!message || message.length < 2) message = "Tres bien.";
 
-  return 
+  return `
 <Response>
   <Gather input="speech" timeout="5" speechTimeout="auto" language="fr-FR" action="/process-speech" method="POST">
     <Say language="fr-FR">
@@ -60,7 +58,7 @@ function buildTwiML(message) {
     </Say>
   </Gather>
 </Response>
-;
+`;
 }
 
 /* ================= ROUTE TEST ================= */
@@ -77,14 +75,13 @@ app.post("/voice", (req, res) => {
   conversations[callSid] = [
     {
       role: "system",
-content: `
+      content: `
 Tu es une assistante téléphonique française naturelle et professionnelle.
 
 Règles obligatoires :
 - Tu dois toujours écrire les dates au format EXACT : YYYY-MM-DD.
 - Si le client ne précise pas l’année, utilise l’année en cours.
 - Si la date est déjà passée cette année, utilise l’année suivante.
-- Ne mets jamais un format comme 15-03 ou 03-15.
 - Toujours : année-mois-jour.
 - En cas de doute sur la date, demande une précision.
 
@@ -128,7 +125,7 @@ app.post("/process-speech", async (req, res) => {
       completion?.choices?.[0]?.message?.content ||
       "Je n ai pas compris.";
 
-    /* ================= CREATE (CORRIGÉ) ================= */
+    /* ================= CREATE ================= */
 
     const createMatch = reply.match(/\[CREATE date="([^"]+)" time="([^"]+)"\]/);
 
@@ -136,8 +133,8 @@ app.post("/process-speech", async (req, res) => {
       const date = createMatch[1];
       const time = createMatch[2];
 
-      const startDateTime = ${date}T${time}:00;
-      const endDate = new Date(${date}T${time}:00);
+      const startDateTime = `${date}T${time}:00`;
+      const endDate = new Date(`${date}T${time}:00`);
       const endDateTime = new Date(endDate.getTime() + 60 * 60 * 1000);
 
       try {
@@ -150,7 +147,7 @@ app.post("/process-speech", async (req, res) => {
               timeZone: "Europe/Paris",
             },
             end: {
-              dateTime: ${date}T${String(endDateTime.getHours()).padStart(2,"0")}:${String(endDateTime.getMinutes()).padStart(2,"0")}:00,
+              dateTime: `${date}T${String(endDateTime.getHours()).padStart(2,"0")}:${String(endDateTime.getMinutes()).padStart(2,"0")}:00`,
               timeZone: "Europe/Paris",
             },
           },
@@ -174,8 +171,8 @@ app.post("/process-speech", async (req, res) => {
       try {
         const events = await calendar.events.list({
           calendarId: "primary",
-          timeMin: ${date}T${time}:00+01:00,
-          timeMax: ${date}T${time}:59+01:00,
+          timeMin: `${date}T${time}:00+01:00`,
+          timeMax: `${date}T${time}:59+01:00`,
         });
 
         if (events.data.items.length > 0) {
@@ -204,8 +201,8 @@ app.post("/process-speech", async (req, res) => {
       try {
         const events = await calendar.events.list({
           calendarId: "primary",
-          timeMin: ${date}T${time}:00+01:00,
-          timeMax: ${date}T${time}:59+01:00,
+          timeMin: `${date}T${time}:00+01:00`,
+          timeMax: `${date}T${time}:59+01:00`,
         });
 
         reply =
@@ -238,4 +235,4 @@ app.post("/process-speech", async (req, res) => {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log("Serveur demarre sur le port " + PORT);
-}); 
+});
